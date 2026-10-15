@@ -20,7 +20,7 @@
     "path": "C:\\Users\\35453\\WorkBuddy\\2026-10-14-19-05-29\\android.keystore",
     "alias": "android"
   },
-  "appVersionName": "1",
+  "appVersionName": "1.0.0",
   "appVersionCode": 1,
   "shortcuts": [],
   "generatorApp": "bubblewrap-cli",
@@ -34,7 +34,7 @@
   "isChromeOSOnly": false,
   "isMetaQuest": false,
   "fullScopeUrl": "https://wxzjss.github.io/orb-duel/",
-  "minSdkVersion": 21,
+  "minSdkVersion": 24,
   "orientation": "landscape",
   "fingerprints": [],
   "additionalTrustedOrigins": [],
@@ -43,5 +43,5 @@
   "fileHandlers": [],
   "launchHandlerClientMode": "",
   "displayOverride": [],
-  "appVersion": "1"
+  "appVersion": "1.0.0"
 }

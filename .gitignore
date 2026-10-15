@@ -2,3 +2,19 @@
 .tmp_script.js
 *.log
 node_modules/
+
+# TWA/Android 构建产物（不进仓库）
+.gradle/
+build/
+app/
+*.apk
+*.aab
+*.idsig
+android.keystore
+bw_build.log
+bw_init.log
+release_body.json
+release_resp.json
+asset_resp.json
+.tmp_orig.js
+tests/_extract.js

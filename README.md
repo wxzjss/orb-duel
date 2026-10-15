@@ -20,6 +20,11 @@
 - **单机 / AI 对战**：浏览器直接打开 `index.html`
 - **局域网对战**：房主运行 `node server.js`，其他设备浏览器访问 `http://<房主IP>:8080`
 
+## Android 版
+- **下载 APK**：[v1.0.0 直链](https://github.com/wxzjss/orb-duel/releases/download/v1.0.0/orb-duel.apk)（Android 7.0+，横屏全屏）
+- **自动更新**：APK 是 TWA 原生壳，启动后加载线上最新版，游戏更新无需重新安装
+- **在线玩**：https://wxzjss.github.io/orb-duel/
+
 ## 仓库结构
 ```
 index.html   游戏本体（全部代码）
