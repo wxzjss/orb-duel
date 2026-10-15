@@ -51,6 +51,8 @@
   #joy-knob { position: absolute; width: 44px; height: 44px; border-radius: 50%;
               background: rgba(255,255,255,.45); display: none; }
 </style>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#000000">
 </head>
 <body>
 <canvas id="game" width="1280" height="720"></canvas>
@@ -3239,6 +3241,14 @@ if (typeof document !== 'undefined') {
 
 })();
 
+</script>
+<script>
+/* PWA: 注册 Service Worker（离线兜底；网络优先，不阻挡线上更新） */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  });
+}
 </script>
 </body>
 </html>
