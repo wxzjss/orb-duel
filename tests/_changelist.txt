@@ -1,0 +1,6 @@
+tests/smoke41.js
+tests/nethelp.js
+tests/api-push.js
+tests/api-push-inc.js
+tests/_filelist.txt
+tests/_changelist.txt
