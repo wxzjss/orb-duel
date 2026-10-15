@@ -1965,6 +1965,11 @@ class Match {
 
     this.fxHooks();
     this.fx.flush();
+    /* v4.1 热修 B1（I-62）：本地 camera 事件消费路由——自扫 lastEmitted 转调本局 camera
+     * （方案 B：FXSystem 保持纯渲染不感知逻辑；广播路径不动，访客仍收恰好一份） */
+    for (const ev of this.fx.lastEmitted) {
+      if (ev.type === 'camera') this.camera.queue(ev.tier, ev.x, ev.y);
+    }
     this.fx.update(worldDt);           // hitstop 期间粒子冻结（fx.md §8）；v4.1 特写慢放同步
     this.camera.update(worldDt);       // v4.1 特写时长走缩放后时间（hitstop 冻结期暂停）
     this.input.endFrame();

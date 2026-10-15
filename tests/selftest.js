@@ -1385,6 +1385,8 @@ console.log('[T21] CameraSystem 三档/同帧最高档/高档抢占/渲染层隔
     const q = m.fx.queue.concat(m.fx.lastEmitted || []);
     ok(q.some((e) => e.type === 'camera' && e.tier === 3), '碎刃 → camera T3 事件产出');
     ok(q.some((e) => e.type === 'blade_shatter'), '碎刃 → blade_shatter 特效产出');
+    m.update(STEP);                                     // 帧末自扫 fx.lastEmitted → 本地消费（I-62 热修）
+    ok(m.camera._pending && m.camera._pending.tier === 3, '本地消费：碎刃 T3 转调 camera.queue（待决）');
   }
 
   // —— (c) 打断 Match 集成：刀命中锤起手 → −1 HP + 相位回 IDLE + 冷却不启动 + T2 ——
@@ -1406,6 +1408,8 @@ console.log('[T21] CameraSystem 三档/同帧最高档/高档抢占/渲染层隔
     ok(q.some((e) => e.type === 'camera' && e.tier === 2), '打断 → camera T2 事件产出');
     ok(q.some((e) => e.type === 'interrupt_fx'), '打断 → interrupt_fx 特效产出');
     ok(m.player.combat.hp === 3, '打断方无伤');
+    m.update(STEP);                                     // 帧末自扫 fx.lastEmitted → 本地消费（I-62 热修）
+    ok(m.camera._pending && m.camera._pending.tier === 2, '本地消费：打断 T2 转调 camera.queue（待决）');
   }
 
   // —— (d) zoom 仅渲染层对拍：camera 变换路径全开，逻辑轨迹与无 camera 完全一致 ——
@@ -1432,6 +1436,28 @@ console.log('[T21] CameraSystem 三档/同帧最高档/高档抢占/渲染层隔
     const a = run(false), b = run(true);
     ok(a.length === b.length && a.every((v, i) => v === b[i]),
        '对拍：camera 激活（zoom 变换全开）期间逻辑坐标轨迹与无 camera 完全一致（9 采样点）');
+  }
+
+  // —— (f) 本地消费全链路：普通命中 T1（fx.queue → lastEmitted → camera.active/timeScale）——
+  {
+    const deps = mkDeps();
+    const m = new Match(deps, { mode: 'demo', p1Input: mkIdleV61('P1'), p2Input: mkIdleV61('P2') });
+    m.update(STEP);
+    m.player.x = 968; m.player.y = 360;
+    m.p2.x = 1032; m.p2.y = 360;
+    m.player.combat.phase = CombatState.BLADE_ACTIVE;   // 刀判定帧打 idle 对手 = 普通命中（T1）
+    m.player.combat._hitVictims.clear();
+    resolveOverlap(m.player, m.p2);
+    m.resolveHits();
+    ok(m.p2.combat.hp === 2, 'T1 场景：刀命中 −1 HP');
+    m.update(STEP);                                     // 帧末 flush + 本地消费
+    ok(m.fx.lastEmitted.filter((e) => e.type === 'camera').length === 1,
+       '广播不双发：lastEmitted 恰好一份 camera 帧（联机访客仍收一份）');
+    m.update(STEP);                                     // 下一帧首 beginFrame 生效
+    ok(m.camera.active && m.camera.tier === 1 && Math.abs(m.camera.timeScale() - 0.3) < 1e-9,
+       '本地特写真实激活：普通命中 T1 active + timeScale 0.3（单机路径不再丢事件）');
+    m.camera.update(CONFIG.CAMERA.T1.DUR);
+    ok(!m.camera.active && m.camera.timeScale() === 1, 'T1 时长走完后回 timeScale=1');
   }
 
   // —— (e) 打断致死：HP=1 锤起手被刀打断 → 按普通死亡收束 ——
