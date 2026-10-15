@@ -110,3 +110,16 @@
 ## 验收补充
 - [ ] 无 server.js 环境下 human/AI、AI/AI 组合各跑通一局（状态流自房主端下发）。
 - [ ] 权威端掉线 → 全员收 PEER_LOST 回大厅。
+
+---
+
+# v4.0 小改 · 录制与联机协议适配
+
+1. **Recorder 事件类型**：`charge` → **`blade`**（dirAngle=准星方向）；新增 **`hammer`**（同）；`guard_begin/guard_end` 不再产生（历史 replay 回放时静默跳过）。录制格式/采样/循环/镜像规则（x'=1280−x、dirAngle'=π−dirAngle）全部不变。
+2. **联机 input 帧协议**：`guardHeld` 字段 → **`hammer`**（bool/坐标）；`click0/chargeHeld` → `blade`。传输层（WebRTC DataChannel、权威端=房主）不变。
+3. **幽灵武器复刻**：幽灵按事件类型执行刀/锤（参数同玩家），锤秒杀/刀三击杀判定对幽灵同等生效——被自己教出来的锤处刑是本版本核心叙事时刻。
+4. 座位/配对/观战/单机模式流转全部不变。
+
+## 验收补充
+- [ ] 含 blade+hammer 事件的完整对局录制→镜像回放闭环跑通。
+- [ ] 联机双端新旧字段协议一致性（同版本客户端）。

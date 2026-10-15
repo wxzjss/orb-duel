@@ -1,4 +1,4 @@
-/* 「光球对决」v2.1+v2.2+v2.3 纯逻辑自测（Node，无真实 DOM/Canvas；Input 用事件桩）
+/* 「光球对决」v4.0「刀与锤」纯逻辑自测（Node，无真实 DOM/Canvas；Input 用事件桩）
  * 运行前提：先从 index.html 提取内嵌脚本到 .tmp_script.js */
 'use strict';
 const fs = require('fs');
@@ -28,7 +28,7 @@ const stub = installStubs();
 new Function(fs.readFileSync(SRC, 'utf8'))();
 const E = globalThis.__EXPORTS__;
 const { CONFIG, Combat, CombatState, Recorder, GhostPlayer, Player, Dummy,
-        checkChargeHit, hitCircleOf, adjudicate, resolveOverlap, Input, FXSystem, Match,
+        checkAttackHit, sectorOf, sectorHits, adjudicate, resolveOverlap, Input, FXSystem, Match,
         serializeReplay, deserializeReplay, LocalGhostStore,
         onSelfWin, onSelfLose, onBossSoloWin, onBossSoloLose,
         selfOutcome, bossSoloOutcome, isModeAvailable, hudLines, seedOnLevelWin,
@@ -48,33 +48,43 @@ const len = (x, y) => Math.hypot(x, y);   // 测试内距离 helper（Utils 不�
 /* 把 Combat 从当前相位推进 n 个逻辑步 */
 function steps(c, n) { for (let i = 0; i < n; i++) c.update(STEP); }
 const mkBall = (x, y, facing) => {
-  const b = { x, y, r: 16, facing };
+  const b = { x, y, r: CONFIG.BALL.R, facing };
   b.combat = new Combat(); b.combat.owner = b;
   return b;
 };
+/* 攻击器构造：直接置判定帧相位（矩阵/几何用；相位即 v4.0 小写枚举） */
+const mkAttacker = (x, y, ang, kind) => {
+  const b = mkBall(x, y, ang);
+  b.combat.phase = kind === 'hammer' ? CombatState.HAMMER_ACTIVE : CombatState.BLADE_ACTIVE;
+  return b;
+};
 
-/* ---------- T0 删净断言（控制 #13：源码扫描；I-40 更正：攻击特效 = v1.0 闪避风格残影+速度线） ---------- */
-console.log('[T0] 删净扫描：闪避词 + 拉丝/光带/星芒/月牙/形变删净 + 死代码删净；残影+速度线存在');
+/* ---------- T0 删净断言（控制 #13：源码扫描；v4.0：防御触发源删净 + 冲撞系特效删净） ---------- */
+console.log('[T0] 删净扫描：闪避词 + 冲撞系特效删净 + guard 触发源删净；刀锤特效语言存在');
 {
   const html = fs.readFileSync(HTML, 'utf8');
   ok(html.match(/dodge|闪避|graze|擦弹/gi) === null, '全文无 dodge/闪避/graze/擦弹（v1.1 T0 不回退）');
-  ok(/crescent|月牙|FX\.WINDUP|FX\.BAND|FX\.SPARK|'charge_windup'|'charge_band'|streaks|squash|stretch/g.test(html) === false,
-     'I-40 更正：拉丝/光带/星芒/月牙/球体形变全部删净（残影+速度线取代）');
-  ok(/RELEASE_DEBOUNCE|guardReady|debounceTimer/.test(html) === false,
-     'v2.3：200ms 防抖通道废除干净');
+  ok(/charge_afterimages|charge_speedlines|FX\.WINDUP|FX\.BAND|FX\.SPARK|streaks|squash|stretch/.test(html) === false,
+     'v4.0：冲撞光带/速度线/拉丝/星芒/球体形变删净（刀锤特效取代；月牙刃光属挥刀语言不在禁区）');
+  ok(/\.guardHeld\(|guard_denied|guard_halo|shield_break|bounce_stun|GUARD_HITSTOP|FX\.BREAK|FX\.STUN|FX\.DENY|startCharge|getChargeDir|consumeClick\(0\)|CHARGE_/.test(html) === false,
+     'v4.0：guard 触发源/负反馈/碎盾/眩晕环删净 + 冲撞状态机入口删净（dormant 仅保留 Combat 内核）');
   ok(/\bnew RemoteGhostStore\b|\bfunction seedRemote\b|\bid="scr-boss"|\bclass BossMenuScreen\b|\bid="scr-ai"|\bclass AiScreen\b|\bAISlotStore\b|\bBUILTIN_AI_SAMPLE\b/.test(html) === false,
      'v3.0：联机三池/RemoteGhostStore/二级boss屏/AI 编辑屏死代码删净（代码级扫描）');
-  // —— 残影 + 速度线存在性（I-40 更正后的攻击特效语言）——
-  ok(/AFTERIMAGE:\s*\{\s*N:\s*3,\s*GAP:\s*0\.025,\s*LIFE:\s*0\.25/.test(html) &&
-     /ALPHAS:\s*\[\s*0\.5,\s*0\.35,\s*0\.2\s*\]/.test(html),
-     '残影参数：3 段 / 25ms 间隔 / 250ms 寿命 / alpha 0.5/0.35/0.2');
-  ok(/SPEEDLINES:\s*\{\s*LIFE:\s*2\s*\/\s*60/.test(html), '速度线：2 帧寿命');
-  ok(/'charge_afterimages'/.test(html) && /'charge_speedlines'/.test(html),
-     'fxHooks 发射残影 + 速度线事件');
+  // —— v4.0 刀锤特效语言存在性（fx.md v4.0 B/C 表）——
+  ok(/BLADE_ARC:\s*\{\s*LIFE:\s*0\.180,\s*WIDTH:\s*24/.test(html) &&
+     /BLADE_AFTER:\s*\{\s*N:\s*2,\s*GAP:\s*0\.025,\s*LIFE:\s*0\.2,\s*ALPHAS:\s*\[\s*0\.4,\s*0\.25\s*\]/.test(html),
+     '挥刀特效参数：宽月牙弧 180ms/宽24 + 残影 2 段 25ms 间隔 alpha 0.4/0.25');
+  ok(/HAMMER_ARC:\s*\{\s*LIFE:\s*0\.250,\s*WIDTH:\s*32/.test(html) &&
+     /HAMMER_RING:\s*\{\s*LIFE:\s*0\.250,\s*R1:\s*70/.test(html),
+     '重锤特效参数：弧光 250ms/宽32 + 落点冲击环 r0→70');
+  ok(html.includes("'blade_swing'") && html.includes("'blade_afterimages'") &&
+     html.includes("'hammer_charge'") && html.includes("'hammer_strike'"),
+     'fxHooks 发射挥刀/重锤四类事件');
+  ok(/GLOW:\s*\{\s*PLAYER:\s*\{\s*R:\s*70,\s*A:\s*0\.85/.test(html), '球体增亮：双层外晕 r70 α0.85');
 }
 
-/* ---------- T1 Recorder → GhostPlayer 镜像回放（v2.3 水平镜像复刻） ---------- */
-console.log('[T1] Recorder + GhostPlayer 镜像复刻（x\'=1280−x，dirAngle\'=π−dirAngle）');
+/* ---------- T1 Recorder → GhostPlayer 镜像回放（v2.3 镜像复刻 + v4.0 charge→blade 映射） ---------- */
+console.log('[T1] Recorder + GhostPlayer 镜像复刻（x\'=1280−x，dirAngle\'=π−dirAngle；charge→blade 映射，guard 静默跳过）');
 {
   const rec = new Recorder();
   rec.begin();
@@ -82,7 +92,7 @@ console.log('[T1] Recorder + GhostPlayer 镜像复刻（x\'=1280−x，dirAngle\
     let x = 230, y = 360;
     if (t >= 30 && t < 90) x = 230 + (t - 30) * 3;
     rec.sample(x, y);
-    if (t === 60) rec.recordAction('charge', 0, t);          // 玩家朝右撞
+    if (t === 60) rec.recordAction('charge', 0, t);          // 历史 replay：旧 charge 事件
     if (t === 150) rec.recordAction('guard_begin', undefined, t);
     if (t === 160) rec.recordAction('guard_end', undefined, t);
   }
@@ -97,16 +107,16 @@ console.log('[T1] Recorder + GhostPlayer 镜像复刻（x\'=1280−x，dirAngle\
 
   const fakeGame = { player: { x: 1050, y: 999 } };
   const ghost = new GhostPlayer(rep, offX, offY);
-  let posOK = true, idleChecked = 0, prevPhase = 'IDLE';
-  let chargePhase60 = null, facing60 = null, guardPhase150 = null, releasePhase160 = null;
+  let posOK = true, idleChecked = 0, prevPhase = 'idle';
+  let bladePhase60 = null, facing60 = null, phase150 = null, phase160 = null;
   for (let t = 0; t < 200; t++) {
     ghost.update(t, STEP, fakeGame);
     if (t === 0) ok(ghost.x === CONFIG.SPAWN.GHOST.x,
                     '幽灵出生点 = 1050 由镜像自然得出（轨迹首帧 230 → x\'=1050）');
-    if (t === 60) { chargePhase60 = ghost.combat.phase; facing60 = ghost.facing; }
-    if (t === 150) guardPhase150 = ghost.combat.phase;
-    if (t === 160) releasePhase160 = ghost.combat.phase;
-    if (ghost.combat.phase === 'IDLE' && prevPhase === 'IDLE') {
+    if (t === 60) { bladePhase60 = ghost.combat.phase; facing60 = ghost.facing; }
+    if (t === 150) phase150 = ghost.combat.phase;
+    if (t === 160) phase160 = ghost.combat.phase;
+    if (ghost.combat.phase === 'idle' && prevPhase === 'idle') {
       idleChecked++;
       if (Math.abs(ghost.x - (CONFIG.VIEW.W - rep.trajectory[2 * t]) - offX) > 1e-4 ||
           Math.abs(ghost.y - rep.trajectory[2 * t + 1] - offY) > 1e-4) { posOK = false; break; }
@@ -114,325 +124,340 @@ console.log('[T1] Recorder + GhostPlayer 镜像复刻（x\'=1280−x，dirAngle\
     prevPhase = ghost.combat.phase;
   }
   ok(posOK, 'IDLE 帧回放位置 = 1280−录制x + offset（镜像逐帧校验 ' + idleChecked + ' 帧）');
-  ok(chargePhase60 === 'CHARGE_WINDUP' && Math.abs(facing60 - Math.PI) < 1e-9,
-     '录制 dirAngle=0（朝右）→ 幽灵 facing=π（朝左，镜像方向换算）');
-  ok(guardPhase150 === 'GUARD', 'guard_begin 原样回放 → GUARD');
-  ok(releasePhase160 === 'GUARD_RELEASE', 'guard_end 原样回放（v2.3 幽灵侧 manual 冷却）');
+  ok(bladePhase60 === 'blade_windup' && Math.abs(facing60 - Math.PI) < 1e-9,
+     'v4.0 映射：录制 charge/dirAngle=0（朝右）→ 幽灵 startBlade 且 facing=π（朝左镜像）');
+  ok(phase150 === 'idle', 'guard_begin 历史事件静默跳过（不进 GUARD，guard.md DEPRECATED）');
+  ok(phase160 === 'idle', 'guard_end 历史事件静默跳过');
 
   // 循环接缝（T=200）
   let seamOK = true;
   for (let t = 200; t < 240; t++) {
     ghost.update(t, STEP, fakeGame);
-    if (ghost.combat.phase !== 'IDLE') continue;
+    if (ghost.combat.phase !== 'idle') continue;
     const tt = t % 200;
     if (Math.abs(ghost.x - (CONFIG.VIEW.W - rep.trajectory[2 * tt])) > 1e-4) { seamOK = false; break; }
   }
   ok(seamOK, 't mod T 循环接缝无跳变（镜像轴）');
 }
 
-/* ---------- T2 Combat：v2.1 参数 50/100/50 + 168px + v2.2 CLASH + v2.3 防御冷却 ---------- */
-console.log('[T2] Combat 状态机（200ms 周期/168px/贴墙/NaN 防御）+ CLASH + hit()/HP');
+/* ---------- T2 Combat：v4.0 刀锤三段 + 双冷却 + STAGGER + hit/kill ---------- */
+console.log('[T2] Combat 刀锤状态机（80/70/120 + 突进 63px；350/150/400；双冷却独立；STAGGER 300ms；kill 秒杀）');
 {
+  ok(CONFIG.BLADE.WINDUP === 0.080 && CONFIG.BLADE.ACTIVE === 0.070 &&
+     CONFIG.BLADE.RECOVERY === 0.120 && CONFIG.BLADE.LUNGE_SPEED === 900 &&
+     CONFIG.BLADE.COOLDOWN === 0.270, '刀参数：80/70/120ms + 900px/s + 冷却 270ms');
+  ok(CONFIG.HAMMER.WINDUP === 0.350 && CONFIG.HAMMER.ACTIVE === 0.150 &&
+     CONFIG.HAMMER.RECOVERY === 0.400 && CONFIG.HAMMER.COOLDOWN === 0.900,
+     '锤参数：350/150/400ms + 冷却 900ms');
+  ok(CONFIG.BALL.SPEED === 640 && CONFIG.BALL.R === 32, 'v4.0 移速 640 / 体型 32');
+
+  // —— 刀三段 + 突进 63px ——
   const b = mkBall(400, 360, 0);
   const c = b.combat;
-  ok(CONFIG.CHARGE.WINDUP === 0.050 && CONFIG.CHARGE.ACTIVE === 0.100 &&
-     CONFIG.CHARGE.RECOVERY === 0.050 && CONFIG.CHARGE.DASH_SPEED === 1680,
-     'v2.1 参数：50/100/50ms + 1680px/s');
-  ok(CONFIG.BALL.SPEED === 640, 'v2.1 移速 640');
-  ok(c.startCharge({ x: 1, y: 0 }, 100) === true, 'startCharge 向量契约');
-  c.update(0.0333);                                   // 2 帧内
-  ok(c.phase === 'CHARGE_WINDUP', '50ms 内保持 WINDUP（起手+判定帧无敌）');
-  c.update(0.05);                                     // 累计 ≥50ms
-  ok(c.phase === 'CHARGE_ACTIVE', '50ms 后进入 CHARGE_ACTIVE（判定帧无敌）');
-  ok(Math.abs(c.dashTo.x - (400 + 168)) < 1e-6, 'dashTo = 起点+168px（1680×0.100 距离守恒）');
-  c.update(0.095);                                    // ACTIVE 95ms < 100ms
-  ok(c.phase === 'CHARGE_ACTIVE', 'ACTIVE 100ms 内保持');
-  c.update(0.02);                                     // 累计 115ms ≥ 100ms
-  ok(c.phase === 'CHARGE_RECOVERY', 'ACTIVE 100ms 后进入 RECOVERY（后摇可被打）');
-  ok(Math.abs((b.x - 400) - 168) < 1e-6, '冲撞位移精确 168px');
+  ok(c.startBlade({ x: 1, y: 0 }, 100) === true, 'startBlade 向量契约');
+  ok(c.bladeCooldown === CONFIG.BLADE.COOLDOWN, '出招即置刀冷却 270ms（从出招起算）');
+  c.update(0.0333);
+  ok(c.phase === 'blade_windup', '80ms 内保持 windup（起手帧无无敌）');
   c.update(0.05);
-  ok(c.phase === 'IDLE', 'RECOVERY 50ms 后回 IDLE（总周期 200ms）');
+  ok(c.phase === 'blade_active', '80ms 后进入判定帧（刃区扇形）');
+  ok(Math.abs(c.dashTo.x - (400 + 63)) < 0.5, 'dashTo = 起点 + 63px（900×0.070 突进）');
+  c.update(0.071);
+  ok(c.phase === 'blade_recovery', '判定 70ms 后进后摇（后摇全身可被打）');
+  ok(Math.abs((b.x - 400) - 63) < 0.5, '突进位移 ≈63px');
+  c.update(0.12);
+  ok(c.phase === 'idle', '后摇 120ms 后回 IDLE（总周期 270ms）');
+  ok(c.bladeCooldown <= 0, '出招起算 270ms 冷却同步走完');
 
-  // 贴墙 clamp
+  // —— 锤三段：无突进 + 起手/判定移动锁定 + 冷却 900ms ——
+  const hb = mkBall(400, 360, 0);
+  const hc = hb.combat;
+  ok(hc.startHammer({ x: 1, y: 0 }, 200) === true, 'startHammer 向量契约');
+  ok(hc.hammerCooldown === CONFIG.HAMMER.COOLDOWN, '出招即置锤冷却 900ms');
+  hc.update(0.34);
+  ok(hc.phase === 'hammer_windup', '350ms 内保持锤起手');
+  hc.update(0.01);
+  ok(hc.phase === 'hammer_active', '350ms 后进判定帧（锤区扇形）');
+  ok(Math.abs(hb.x - 400) < 1e-9, '锤无突进（判定帧位移为 0）');
+  hc.update(0.15);
+  ok(hc.phase === 'hammer_recovery', '判定 150ms 后进后摇');
+  hc.update(0.4);
+  ok(hc.phase === 'idle', '后摇 400ms 后回 IDLE（总周期 900ms）');
+  ok(Math.abs(hc.hammerCooldown) < 1e-9, '锤冷却 900ms 同步走完');
+
+  // —— 双冷却独立互不取消 ——
+  const db = mkBall(400, 360, 0);
+  db.combat.startBlade({ x: 1, y: 0 }, 0);
+  db.combat.update(0.05);                       // 刀起手中
+  ok(db.combat.startHammer({ x: 1, y: 0 }, 0) === false, '攻击状态槽互斥：非 IDLE 不能出锤');
+  db.combat.bladeCooldown = 0.1;                // 白盒：刀仍在冷却
+  db.combat.phase = CombatState.IDLE;           // 相位空闲但冷却未尽
+  ok(db.combat.startBlade({ x: 1, y: 0 }, 0) === false, '刀冷却期内拒绝再出刀');
+  ok(db.combat.startHammer({ x: 1, y: 0 }, 0) === true, '锤冷却独立：可立即出锤');
+
+  // —— 贴墙 clamp（突进端点） ——
   const wall = mkBall(1240, 360, 0);
-  wall.combat.startCharge({ x: 1, y: 0 }, 300);
-  wall.combat.update(0.05);
+  wall.combat.startBlade({ x: 1, y: 0 }, 300);
+  wall.combat.update(0.08);
   ok(wall.combat.dashTo.x === CONFIG.VIEW.W - CONFIG.BOUND.INSET,
-     '贴墙 dashTo.x = 1264（clamp 生效）');
-  wall.combat.update(0.1);
-  ok(Math.abs(wall.x - 1264) < 1e-6, '贴墙冲撞实际终点不穿墙');
+     '贴墙 dashTo.x = 1248（INSET=32 clamp 生效）');
+  ok(CONFIG.BOUND.INSET === 32, 'v4.0 边界内缩 = 体型 32');
 
-  // NaN 防御
+  // —— NaN 防御 ——
   const nanBall = mkBall(500, 360, NaN);
-  nanBall.combat.phase = 'CHARGE_ACTIVE';
+  nanBall.combat.phase = CombatState.BLADE_ACTIVE;
   const victim = mkBall(505, 360, 0);
-  ok(checkChargeHit(nanBall, victim) === null, 'NaN facing → checkChargeHit 返回 null');
+  ok(checkAttackHit(nanBall, victim) === null, 'NaN facing → sectorHits false → checkAttackHit null');
 
-  // v2.2 CLASH：击退 60px/150ms + 硬直 150ms = 300ms
+  // —— STAGGER：刀刀弹开 300ms（击退 60px/150ms + 硬直 150ms），不掉血 ——
   const cb = mkBall(500, 360, 0);
-  cb.combat.clash({ x: -1, y: 0 });
-  ok(cb.combat.phase === 'CLASH', 'clash() 进入 CLASH');
+  cb.combat.stagger({ x: -1, y: 0 });
+  ok(cb.combat.phase === 'stagger', 'stagger() 进入 STAGGER');
   cb.combat.update(0.075);
   ok(Math.abs((500 - cb.x) - 30) < 1e-6, '击退插值半程 30px@75ms');
   cb.combat.update(0.075);
   ok(Math.abs((500 - cb.x) - CONFIG.CLASH.KNOCKBACK) < 1e-6, '击退 60px/150ms 完成');
   cb.combat.update(0.15);
-  ok(cb.combat.phase === 'IDLE' && Math.abs(cb.x - 440) < 1e-6, '300ms 弹开结束回 IDLE（硬直钉在终点）');
+  ok(cb.combat.phase === 'idle' && Math.abs(cb.x - 440) < 1e-6, '300ms 弹开结束回 IDLE（硬直钉在终点）');
 
-  // v2.2 hit()/HP=3：归 0 才死
+  // —— hit()/HP=3 与 kill() 秒杀（无视 HP） ——
   const h = mkBall(0, 0, 0);
   ok(h.combat.hp === 3 && h.combat.maxHP === 3, '初始 HP=3');
-  ok(h.combat.hit() === 'hit' && h.combat.hp === 2, '第 1 次命中 −1 HP 不死');
-  ok(h.combat.hit() === 'hit' && h.combat.hp === 1, '第 2 次命中 −1 HP 不死');
-  ok(h.combat.hit() === 'dead' && h.combat.hp === 0 && h.combat.phase === 'DEAD',
-     '第 3 次命中 HP 归 0 → DEAD');
+  ok(h.combat.hit() === 'hit' && h.combat.hp === 2, '刀命中 −1 HP 不死');
+  ok(h.combat.hit() === 'hit' && h.combat.hp === 1, '第 2 刀 −1 HP 不死');
+  ok(h.combat.hit() === 'dead' && h.combat.hp === 0 && h.combat.phase === 'dead',
+     '第 3 刀 HP 归 0 → dead');
+  const k = mkBall(0, 0, 0);
+  k.combat.hit(); k.combat.hit();               // HP=1
+  k.combat.kill();
+  ok(k.combat.hp === 0 && k.combat.phase === 'dead', 'kill() 无视 HP 直接秒杀');
 }
 
-/* ---------- T2b 防御冷却三分支（v2.3） ---------- */
-console.log('[T2b] v2.3 防御重做：manual 等值冷却 / 格挡 3s / 满额 3s / 冷却期拒绝 / 格挡优先');
+/* ---------- T2b guard dormant（v4.0：代码保留无触发源） ---------- */
+console.log('[T2b] dormant 防御内核：startGuard/releaseGuard/bounce 可编程触发仍自洽（运行时无调用源）');
 {
-  // 分支 a：松开 → 冷却 = 已防御时长（无下限）
+  // dormant 语义回归：内核分支保留且行为不变（供未来复用/回滚验证）
   const a = mkBall(0, 0, 0);
   a.combat.startGuard();
-  steps(a.combat, 1);                                 // held ≈16.7ms
-  ok(a.combat.releaseGuard('manual') === true && a.combat.phase === 'GUARD_RELEASE',
-     '松开 → GUARD_RELEASE（冷却计时通道）');
-  ok(Math.abs(a.combat._coolDur - STEP) < 1e-9, 'held 1 帧 → 冷却 = 已防御时长（无下限）');
   steps(a.combat, 1);
-  ok(a.combat.phase === 'IDLE', '冷却结束回 IDLE');
+  ok(a.combat.releaseGuard('manual') === true && a.combat.phase === 'GUARD_RELEASE',
+     'startGuard→releaseGuard(manual) 内核自洽（dormant）');
+  ok(Math.abs(a.combat._coolDur - STEP) < 1e-9, 'manual 冷却 = 已防御时长');
+  steps(a.combat, 1);
+  ok(a.combat.phase === 'idle', '冷却结束回 IDLE');
 
-  const a2 = mkBall(0, 0, 0);
-  a2.combat.startGuard();
-  steps(a2.combat, 120);                              // held 2s
-  a2.combat.releaseGuard('manual');
-  ok(Math.abs(a2.combat._coolDur - 2.0) < 1e-9, 'held 2s → 冷却 2s（等值）');
-  steps(a2.combat, 121);
-  ok(a2.combat.phase === 'IDLE', '2s 冷却走完');
+  const bn = mkBall(500, 360, 0);
+  bn.combat.phase = 'blade_active';
+  bn.combat.bounce();
+  ok(bn.combat.phase === 'BOUNCE', 'bounce 内核自洽（dormant）');
+  bn.combat.update(CONFIG.BOUNCE.DURATION);
+  ok(bn.combat.phase === 'idle', 'BOUNCE 400ms 后回 IDLE');
 
-  // 冷却期右键无效
-  const a3 = mkBall(0, 0, 0);
-  a3.combat.startGuard();
-  a3.combat.releaseGuard('manual');                   // held 0 → 冷却 0
-  a3.combat.startGuard();
-  steps(a3.combat, 1);                                // 推进 1 帧脱离 0 冷却？0 冷却当帧即 IDLE
-  // 重新构造非零冷却拒绝场景：
-  const a4 = mkBall(0, 0, 0);
-  a4.combat.startGuard();
-  steps(a4.combat, 60);                               // held 1s
-  a4.combat.releaseGuard('manual');                   // 冷却 1s
-  ok(a4.combat.startGuard() === false && a4.combat.phase === 'GUARD_RELEASE',
-     '冷却期内 startGuard 被拒绝');
-  steps(a4.combat, 61);
-  ok(a4.combat.phase === 'IDLE' && a4.combat.startGuard() === true, '冷却结束可再盾');
-
-  // 分支 b：格挡成功 → 冷却 3s
-  const g1 = mkBall(0, 0, 0);
-  g1.combat.startGuard();
-  steps(g1.combat, 12);                               // held 0.2s
-  g1.combat.releaseGuard('block');
-  ok(Math.abs(g1.combat._coolDur - 3.0) < 1e-9, '格挡成功（block）→ 冷却 3s');
-
-  // 分支 c：满额 3s 自动结束 → 冷却 3s；满额帧格挡优先
-  // （白盒逼近满额帧，规避 1/60 累加浮点边界）
-  const g2 = mkBall(0, 0, 0);
-  g2.combat.startGuard();
-  g2.combat.t = CONFIG.GUARD.MAX_HOLD - 1e-6;         // 差 1µs 满 3s
-  g2.combat.update(STEP);                             // 本帧跨过 3s
-  ok(g2.combat.phase === 'GUARD' && g2.combat._expire === true,
-     '满额帧保持 GUARD（不立即结束，格挡优先窗口）');
-  ok(Math.abs(g2.combat.t - 3.0) < 1e-9, '满额帧 t 冻结于 3s');
-  g2.combat.update(STEP);                             // 下一帧
-  ok(g2.combat.phase === 'GUARD_RELEASE' && Math.abs(g2.combat._coolDur - 3.0) < 1e-9,
-     '满额未被命中 → 下一帧自动结束，冷却 3s（分支 c）');
-  ok(g2.combat.startGuard() === false, '冷却期拒绝再盾');
-
-  // 满额瞬间恰被打 → 格挡优先（先到先结算）
-  const g3 = mkBall(0, 360, 0);
-  g3.combat.startGuard();
-  g3.combat.t = CONFIG.GUARD.MAX_HOLD - 1e-6;
-  g3.combat.update(STEP);                             // 满额帧（GUARD 保持）
-  const atk = mkBall(0, 360, 0);                      // 探针球与 g3 重合（打击圈覆盖）
-  atk.combat.phase = 'CHARGE_ACTIVE';
-  ok(checkChargeHit(atk, g3) === 'guard', '满额帧被打 → 判定 guard（格挡优先，不掉血）');
-  atk.combat.bounce();
-  g3.combat.releaseGuard('block');
-  ok(Math.abs(g3.combat._coolDur - 3.0) < 1e-9, '满额被打走 block 分支（冷却 3s，非 timeout）');
+  // dormant 枚举仍在 CombatState（联机协议 phase 兼容面）
+  ok(CombatState.GUARD === 'GUARD' && CombatState.GUARD_RELEASE === 'GUARD_RELEASE' &&
+     CombatState.BOUNCE === 'BOUNCE' && CombatState.CLASH === 'CLASH',
+     'dormant 相位枚举保留（GUARD/GUARD_RELEASE/BOUNCE/CLASH）');
+  ok(CombatState.BLADE_ACTIVE === 'blade_active' && CombatState.HAMMER_ACTIVE === 'hammer_active' &&
+     CombatState.STAGGER === 'stagger' && CombatState.DEAD === 'dead',
+     'v4.0 相位枚举小写字符串（联机快照 phase 同源）');
 }
 
-/* ---------- T3 命中矩阵四态 + adjudicate（v2.2：废除 startTick 裁决与 DRAW 触发） ---------- */
-console.log('[T3] checkChargeHit 四态矩阵 + adjudicate（clash/ineffective 新通道，对称性）');
+/* ---------- T3 v4.0 命中矩阵全表 + 结算顺序（attack.md §5，确定性核心） ---------- */
+console.log('[T3] sectorHits 几何容差 + checkAttackHit 矩阵（刀 hit/锤 kill）+ adjudicate ①②③ + 护前不护后 + 至多一次');
 {
-  const atk = mkBall(500, 360, 0);
-  atk.combat.startCharge({ x: 1, y: 0 }, 100);
-  atk.combat.update(0.05);                            // 恰转 ACTIVE（球未动，dashFrom=500）
-  const hc = hitCircleOf(atk);
-  ok(hc.x === 518 && hc.y === 360 && hc.r === 20, '打击圈 = 球心前方 18px, r=20');
+  // —— (a) 扇形几何：刀 128px/±45°，锤 96px/±30°，目标圈 atan(32/d) 角度补偿 + radius+32 距离补偿 ——
+  const B = mkAttacker(500, 360, 0, 'blade');         // 刀判定帧朝右
+  ok(sectorOf(B).radius === 128 && Math.abs(sectorOf(B).halfAngle - Math.PI / 4) < 1e-9,
+     'sectorOf(blade_active)：radius=128 / halfAngle=π/4');
+  ok(sectorHits(sectorOf(B), mkBall(600, 360, Math.PI)) === true, '刀：正前 100px 在刃区（≤128+32）');
+  ok(sectorHits(sectorOf(B), mkBall(665, 360, Math.PI)) === false, '刀：165px > 128+32 补偿外不可及');
+  const diag = mkBall(500 + 100 * Math.SQRT1_2, 360 + 100 * Math.SQRT1_2, Math.PI);
+  ok(sectorHits(sectorOf(B), diag) === true, '刀：45° 斜向 100px（da=45° ≤ 45°+容差）命中');
+  const edge = mkBall(500 + 100 * Math.cos(1.05), 360 + 100 * Math.sin(1.05), Math.PI);
+  ok(sectorHits(sectorOf(B), edge) === true, '刀：60.2° 处 atan(32/100)≈17.7° 容差补偿内命中');
+  const farAng = mkBall(500 + 100 * Math.cos(1.4), 360 + 100 * Math.sin(1.4), Math.PI);
+  ok(sectorHits(sectorOf(B), farAng) === false, '刀：80.2° 超出 45°+容差 → 刃区外');
+  const H = mkAttacker(500, 360, 0, 'hammer');        // 锤判定帧朝右
+  ok(sectorOf(H).radius === 96 && Math.abs(sectorOf(H).halfAngle - Math.PI / 6) < 1e-9,
+     'sectorOf(hammer_active)：radius=96 / halfAngle=π/6');
+  ok(sectorHits(sectorOf(H), mkBall(580, 360, Math.PI)) === true, '锤：正前 80px 在锤区（≤96+32）');
+  ok(sectorHits(sectorOf(H), mkBall(640, 360, Math.PI)) === false, '锤：140px > 96+32 不可及');
+  ok(sectorHits(sectorOf(H), mkBall(500 + 64 * Math.cos(0.95), 360 + 64 * Math.sin(0.95), Math.PI)) === true,
+     '锤：54.4° 处 atan(32/64)≈26.6° 容差补偿内命中（30°+26.6°）');
+  ok(sectorHits(sectorOf(H), mkBall(500 + 64 * Math.cos(1.25), 360 + 64 * Math.sin(1.25), Math.PI)) === false,
+     '锤：71.6° 超出 30°+容差 → 锤区外');
+  ok(sectorHits({ x: 500, y: 360, dirAngle: NaN, radius: 128, halfAngle: 1 }, mkBall(560, 360, 0)) === false,
+     'NaN dirAngle 防御 → false');
 
-  // 四态逐一（目标 548，圆心距 30 < 36）
-  ok(checkChargeHit(atk, mkBall(548, 360, Math.PI)) === 'hit', '矩阵·普通（IDLE）→ hit');
-  const rec = mkBall(548, 360, Math.PI);
-  rec.combat.phase = 'CHARGE_RECOVERY';
-  ok(checkChargeHit(atk, rec) === 'hit', '矩阵·后摇 → hit（可被打）');
-  const bnc = mkBall(548, 360, Math.PI);
-  bnc.combat.phase = 'BOUNCE';
-  ok(checkChargeHit(atk, bnc) === 'hit', '矩阵·弹开 → hit（矩阵「普通」行含弹开）');
-  const rel = mkBall(548, 360, Math.PI);
-  rel.combat.phase = 'GUARD_RELEASE';
-  ok(checkChargeHit(atk, rel) === 'hit', '矩阵·防御冷却 → hit（普通行）');
-  const wind = mkBall(548, 360, Math.PI);
-  wind.combat.startCharge({ x: -1, y: 0 }, 99);
-  ok(checkChargeHit(atk, wind) === 'inv_windup', '矩阵·无敌起手 → inv_windup（无效命中）');
-  const act = mkBall(548, 360, Math.PI);
-  act.combat.startCharge({ x: -1, y: 0 }, 99);
-  act.combat.update(0.05);                            // ACTIVE
-  ok(checkChargeHit(atk, act) === 'clash', '矩阵·无敌判定帧 → clash（对撞弹开）');
-  const grd = mkBall(548, 360, Math.PI);
-  grd.combat.startGuard();
-  ok(checkChargeHit(atk, grd) === 'guard', '矩阵·防御姿态 → guard（规则不变）');
-  const dead = mkBall(548, 360, Math.PI);
-  dead.combat.kill();
-  ok(checkChargeHit(atk, dead) === null, 'DEAD 不产生事件');
-
-  // 命中结算标记：同一冲撞对同一目标至多一次
-  const v1 = mkBall(500, 360, 0), v2 = mkBall(548, 360, Math.PI);
-  v1.combat.startCharge({ x: 1, y: 0 }, 100);
-  steps(v1.combat, 4);
-  checkChargeHit(v1, v2);
+  // —— (b) 5.1/5.2 矩阵逐行（checkAttackHit）——
+  const ab = mkAttacker(500, 360, 0, 'blade');
+  ok(checkAttackHit(ab, mkBall(564, 360, Math.PI)) === 'blade', '矩阵 5.1：刀 vs idle → hit（blade）');
+  const corpse = mkBall(564, 360, Math.PI);
+  corpse.combat.kill();
+  ok(checkAttackHit(ab, corpse) === null, 'DEAD 不产生事件');
+  const ah = mkAttacker(500, 360, 0, 'hammer');
+  ok(checkAttackHit(ah, mkBall(564, 360, Math.PI)) === 'hammer', '矩阵 5.2：锤 vs idle → 秒杀（hammer）');
+  const backBlade = mkBall(564, 360, 0);              // 对手刀判定帧但背对（朝右）
+  ok(checkAttackHit(ah, backBlade) === 'hammer', '矩阵 5.2：锤 vs 对手刀判定帧（背对）→ kill（锤无格挡语义）');
+  ok(backBlade.combat.hp === 3, '秒杀无视当前 HP');
+  // 至多一次标记
+  const v1 = mkAttacker(500, 360, 0, 'blade'), v2 = mkBall(564, 360, Math.PI);
+  ok(checkAttackHit(v1, v2) === 'blade', '首次判定产生事件');
   v1.combat._hitVictims.add(v2);
-  ok(checkChargeHit(v1, v2) === null, '已结算目标不再重复判定（矩阵 D）');
+  ok(checkAttackHit(v1, v2) === null, '同一攻击对同一目标至多一次（_hitVictims）');
 
-  // adjudicate：双 clash（含同 tick）→ 弹开，无 DRAW
-  const p1 = mkBall(500, 360, 0), p2 = mkBall(548, 360, Math.PI);
-  p1.combat.startCharge({ x: 1, y: 0 }, 100);
-  p2.combat.startCharge({ x: -1, y: 0 }, 100);        // 同 tick 起手
-  p1.combat.update(0.05); p2.combat.update(0.05);     // 双 ACTIVE（球未动）
-  const ev = [];
-  const r1 = checkChargeHit(p1, p2), r2 = checkChargeHit(p2, p1);
-  if (r1) ev.push({ attacker: p1, defender: p2, kind: r1 });
-  if (r2) ev.push({ attacker: p2, defender: p1, kind: r2 });
-  ok(ev.length === 2 && ev[0].kind === 'clash' && ev[1].kind === 'clash',
-     '同 tick 对撞：双方判定帧接触（双 clash 事件）');
-  const v = adjudicate(ev);
-  ok(v.type === 'clash' && (v.a === p1 || v.a === p2), '双 clash → 对撞弹开（废除 startTick 比较）');
-  const vSwap = adjudicate([ev[1], ev[0]]);
-  ok(vSwap.type === 'clash', '对称输入产出对称输出（控制 #15）');
-  ok(adjudicate([{ attacker: p1, defender: p2, kind: 'clash' }]).type === 'clash',
-     '单 clash（对方判定圈未及）同样弹开');
-
-  // 单事件四态
-  const e1 = mkBall(500, 360, 0), t1 = mkBall(548, 360, Math.PI);
-  e1.combat.startCharge({ x: 1, y: 0 }, 100); e1.combat.update(0.05);
-  ok(adjudicate([{ attacker: e1, defender: t1, kind: 'hit' }]).type === 'win',
-     'hit → 有效命中通道');
-  ok(adjudicate([{ attacker: e1, defender: t1, kind: 'inv_windup' }]).type === 'ineffective',
-     'inv_windup → 无效命中通道（光刃消散，无白闪无震动）');
-  const v3 = adjudicate([{ attacker: e1, defender: t1, kind: 'guard' }]);
-  ok(v3.type === 'guard' && v3.attacker === e1 && v3.defender === t1, 'guard → 格挡通道');
+  // —— (c) adjudicate §5.3 结算顺序 ——
+  // ① 刀刀双判定帧双向刃区相交 → stagger
+  const p1 = mkAttacker(500, 360, 0, 'blade'), p2 = mkAttacker(564, 360, Math.PI, 'blade');
+  const ev1 = [{ attacker: p1, defender: p2, kind: 'blade' }, { attacker: p2, defender: p1, kind: 'blade' }];
+  const vd = adjudicate(ev1);
+  ok(vd.type === 'stagger' && (vd.a === p1 || vd.a === p2), '① 双刀刃区互交 → stagger（弹开）');
+  const vdSwap = adjudicate([ev1[1], ev1[0]]);
+  ok(vdSwap.type === 'stagger', '① 对称输入对称输出（控制 #15）');
+  // ① 不触发变体：双刀但 defender 背对（单向覆盖）→ 落 ③
+  const q1 = mkAttacker(500, 360, 0, 'blade'), q2 = mkAttacker(564, 360, 0, 'blade');   // q2 朝右背对
+  const vs = adjudicate([{ attacker: q1, defender: q2, kind: 'blade' }]);
+  ok(vs.type === 'list' && vs.list.length === 1 && vs.list[0].type === 'hit',
+     '护前不护后：defender 刀判定帧但背对 → ① 不触发 → ③ hit');
+  // ② 锤锤互中 → draw_kill
+  const m1 = mkAttacker(500, 360, 0, 'hammer'), m2 = mkAttacker(564, 360, Math.PI, 'hammer');
+  const vk = adjudicate([{ attacker: m1, defender: m2, kind: 'hammer' },
+                         { attacker: m2, defender: m1, kind: 'hammer' }]);
+  ok(vk.type === 'draw_kill' && (vk.a === m1 || vk.a === m2), '② 双锤互中 → draw_kill（同归于尽）');
+  ok(adjudicate([{ attacker: m1, defender: m2, kind: 'hammer' }]).type === 'list',
+     '单锤事件（对方锤区未及）不触发 ②，落 ③ kill');
+  // ③ 混合事件：锤+刀互覆盖 → ineffective（defender 刀区护前）+ kill（defender 被锤杀）
+  const ha = mkAttacker(500, 360, 0, 'hammer');
+  const db = mkAttacker(564, 360, Math.PI, 'blade');  // 对手刀判定帧朝左（面向锤）
+  const vm = adjudicate([{ attacker: ha, defender: db, kind: 'hammer' },
+                         { attacker: db, defender: ha, kind: 'blade' }]);
+  ok(vm.type === 'list' && vm.list.length === 2 &&
+     vm.list[0].type === 'ineffective' && vm.list[1].type === 'hit',
+     '③ 混合逐点：defender 刀判定帧且攻击者在其刃区 → 锤被格挡 ineffective；defender 的刀打锤判定帧 → hit');
+  // ③ 单刀事件 → hit
+  const s1 = mkAttacker(500, 360, 0, 'blade');
+  const vhit = adjudicate([{ attacker: s1, defender: mkBall(564, 360, Math.PI), kind: 'blade' }]);
+  ok(vhit.type === 'list' && vhit.list[0].type === 'hit' && vhit.list[0].winner === s1,
+     '③ 单刀事件 → list[0] hit（winner/loser 通道）');
+  // ③ 单锤事件 → kill
+  const vkill = adjudicate([{ attacker: mkAttacker(500, 360, 0, 'hammer'),
+                              defender: mkBall(564, 360, Math.PI), kind: 'hammer' }]);
+  ok(vkill.type === 'list' && vkill.list[0].type === 'kill', '③ 单锤事件 → list[0] kill（秒杀）');
+  ok(adjudicate([]).type === 'none', '空事件 → none');
 }
 
-/* ---------- T3b 实体碰撞软推挤（v2.2 E） ---------- */
-console.log('[T3b] resolveOverlap：分离无重叠 / 完全重合 / DEAD 不推 / 交错冲撞无穿模');
+/* ---------- T3b 实体碰撞软推挤（v2.2 E，v4.0 分离距离 64） ---------- */
+console.log('[T3b] resolveOverlap：分离 64（32+32）/ 完全重合 / DEAD 不推 / 交错突进无穿模');
 {
-  const a = mkBall(500, 360, 0), b = mkBall(510, 360, 0);   // 距 10 < 32
+  ok(CONFIG.BALL.R * 2 === 64, 'v4.0 本体分离距离 = 64（体型翻倍）');
+  const a = mkBall(500, 360, 0), b = mkBall(510, 360, 0);   // 距 10 < 64
   resolveOverlap(a, b);
-  ok(Math.abs(len(b.x - a.x, b.y - a.y) - 32) < 1e-6 && a.x < 500 && b.x > 510,
-     '重叠 → 沿连线各推一半至恰好不重叠');
+  ok(Math.abs(len(b.x - a.x, b.y - a.y) - 64) < 1e-6 && a.x < 500 && b.x > 510,
+     '重叠 → 沿连线各推一半至恰好不重叠（64）');
 
   const c1 = mkBall(500, 360, 0), c2 = mkBall(500, 360, 0); // 完全重合
   resolveOverlap(c1, c2);
-  ok(Math.abs(len(c2.x - c1.x, c2.y - c1.y) - 32) < 1e-6, '完全重合 → 沿 +x 分离');
+  ok(Math.abs(len(c2.x - c1.x, c2.y - c1.y) - 64) < 1e-6, '完全重合 → 沿 +x 分离 64');
 
   const d1 = mkBall(500, 360, 0), d2 = mkBall(510, 360, 0);
   d1.combat.kill();
   resolveOverlap(d1, d2);
   ok(d2.x === 510, 'DEAD 不推（尸体静止）');
 
-  // 交错冲撞：相向 dash 中点相遇，多帧分离无穿模
+  // 交错突进：相向 dash 中点相遇，多帧分离无穿模
   const s1 = mkBall(400, 360, 0), s2 = mkBall(700, 360, Math.PI);
-  s1.combat.startCharge({ x: 1, y: 0 }, 0);
-  s2.combat.startCharge({ x: -1, y: 0 }, 0);
-  steps(s1.combat, 4); steps(s2.combat, 4);           // 双 ACTIVE，dashTo 568 / 532（已交错）
+  s1.combat.startBlade({ x: 1, y: 0 }, 0);
+  s2.combat.startBlade({ x: -1, y: 0 }, 0);
+  steps(s1.combat, 5); steps(s2.combat, 5);           // 双 ACTIVE（突进中点已交错）
   let noClip = true;
   for (let i = 0; i < 30; i++) {
     s1.combat.update(STEP); s2.combat.update(STEP);
     resolveOverlap(s1, s2);
     if (len(s2.x - s1.x, s2.y - s1.y) < s1.r + s2.r - 1e-6) { noClip = false; break; }
   }
-  ok(noClip, '交错冲撞逐帧软推挤：全程无穿模（判定圈随实际球心）');
+  ok(noClip, '交错突进逐帧软推挤：全程无穿模（扇形随实际球心重算）');
 }
 
-/* ---------- T4 Input：方向三级解析 + guardHeld（v2.3 无防抖） ---------- */
-console.log('[T4] Input getChargeDir 三级回退 + guardHeld');
+/* ---------- T4 Input：准星方向 + 刀/锤点按消费（v4.0 键位） ---------- */
+console.log('[T4] Input getAim 准星/触屏兜底 + consumeBlade/consumeHammer 点按一次消费 + 失焦清空');
 {
   const input = new Input(stub.canvas);
   const pos = { x: 400, y: 360 };
+  stub.fireCanvas('mousemove', { clientX: 400, clientY: 160 });   // 准星在球心正上
+  let dir = input.getAim(pos, null);
+  ok(dir.x === 0 && Math.abs(dir.y + 1) < 1e-9, 'getAim：鼠标准星方向 (0,-1)');
+  stub.fireCanvas('mousemove', { clientX: 640, clientY: 360 });
+  dir = input.getAim({ x: 640, y: 360 }, null);
+  ok(dir.x === 0 && dir.y === 0, '准星与球心重合 → 零向量（Player 层兜底朝对手）');
 
-  stub.fireWin('keydown', { code: 'KeyD', preventDefault() {} });
-  let dir = input.getChargeDir(pos);
-  ok(dir.x === 1 && dir.y === 0, '三级1：移动输入方向 (1,0)');
-  stub.fireWin('keyup', { code: 'KeyD' });
-  dir = input.getChargeDir(pos);
-  ok(dir.x === 1 && dir.y === 0, '三级2：lastMoveDir 记忆 (1,0)');
+  // 左键挥刀 / 右键重锤：点按一次消费
   const input2 = new Input(stub.canvas);
-  stub.fireCanvas('mousemove', { clientX: 400, clientY: 160 });
-  dir = input2.getChargeDir({ x: 400, y: 360 });
-  ok(Math.abs(dir.y + 1) < 1e-9 && Math.abs(dir.x) < 1e-9, '三级3：鼠标方向兜底 (0,-1)');
-
-  const input3 = new Input(stub.canvas);
-  ok(input3.guardHeld() === false, '初始未按右键');
+  ok(input2.consumeBlade() === false && input2.consumeHammer() === false, '初始无点按');
+  stub.fireCanvas('mousedown', { button: 0 });
+  ok(input2.consumeBlade() === true && input2.consumeBlade() === false, '左键 → blade 点按一次消费');
   stub.fireCanvas('mousedown', { button: 2 });
-  ok(input3.guardHeld() === true, '右键按住 → guardHeld');
-  stub.fireWin('mouseup', { button: 2 });
-  ok(input3.guardHeld() === false, '松开 → guardHeld=false（冷却归 Combat，无 Input 防抖）');
-  stub.fireCanvas('mousedown', { button: 2 });        // 立即再按：由 Combat 相位拒绝
-  ok(input3.guardHeld() === true, '再按即上报 held（拒绝逻辑在 Combat 层）');
+  ok(input2.consumeHammer() === true && input2.consumeHammer() === false, '右键 → hammer 点按一次消费');
+  stub.fireCanvas('mousedown', { button: 2 });
   stub.fireWin('blur', {});
-  ok(input3.guardHeld() === false, '失焦清空 guard 按住状态');
+  ok(input2.consumeHammer() === false, '失焦清空重锤点按（防幽灵键）');
+  input2.endFrame();
+  ok(input2.consumeBlade() === false, 'endFrame 后未消费的左键不跨帧排队');
+
+  // 触屏聚合：攻击钮→刀 / 重锤钮→锤（v4.0 键位改派）
+  const input3 = new Input(stub.canvas);
+  input3.touch.btnAtk.down(5);
+  ok(input3.consumeBlade() === true, '触屏攻击钮 → consumeBlade 聚合');
+  input3.touch.btnGuard.down(5);
+  ok(input3.consumeHammer() === true, '触屏防御钮 → consumeHammer（v4.0 重锤改派）');
+
+  // 触屏准星：摇杆方向 > 朝对手兜底
+  const input4 = new Input(stub.canvas);
+  input4.touch.visible = true;
+  input4.touch.joystick.start(3, 100, 100);
+  input4.touch.joystick.move(3, 160, 100);
+  dir = input4.getAim({ x: 400, y: 360 }, null);
+  ok(Math.abs(dir.x - 1) < 1e-9 && Math.abs(dir.y) < 1e-9, '触屏：摇杆方向优先为准星');
+  input4.touch.joystick.end(3);
+  dir = input4.getAim({ x: 400, y: 360 }, { p2: { x: 400, y: 200 } });
+  ok(Math.abs(dir.y + 1) < 1e-9, '触屏摇杆静止 → 朝对手兜底');
+  dir = input4.getAim({ x: 400, y: 360 }, null);
+  ok(dir.x === 0 && dir.y === 0, '触屏无摇杆无对手 → 零向量');
 }
 
-/* ---------- T5 Player 防御输入流（v2.3：冷却负反馈）+ 录制事件对齐 ---------- */
-console.log('[T5] Player 防御流：GUARD→manual 冷却→冷却期拒绝→负反馈');
+/* ---------- T5 Player 刀/锤输入流 + 录制事件对齐（v4.0） ---------- */
+console.log('[T5] Player 输入流：左键出刀（准星角）/ 非IDLE拒绝 / 冷却期拒绝 / blade 事件 t 同源');
 {
   const input = new Input(stub.canvas);
   const rec = new Recorder(); rec.begin();
   const player = new Player(CONFIG.SPAWN.PLAYER.x, CONFIG.SPAWN.PLAYER.y);
   player.combat.onAction = (type, ang, t) => rec.recordAction(type, ang, t);
-  const fxQ = [];
-  const game = { tick: 0, fx: { queue: fxQ } };
+  const game = { tick: 0, fx: { queue: [] } };
 
-  stub.fireCanvas('mousedown', { button: 2 });
+  stub.fireCanvas('mousemove', { clientX: 1130, clientY: 360 });   // 准星正右
+  stub.fireCanvas('mousedown', { button: 0 });
   player.update(STEP, input, game);
-  ok(player.combat.phase === 'GUARD' && player.x === CONFIG.SPAWN.PLAYER.x,
-     '右键按住 → GUARD（移动锁定）');
-  for (let i = 0; i < 4; i++) player.update(STEP, input, game);   // 帧内 startGuard+update：held 累计 5 帧
-  stub.fireWin('mouseup', { button: 2 });
+  ok(player.combat.phase === 'blade_windup' && Math.abs(player.facing) < 1e-9,
+     '左键+准星右 → blade_windup，facing=0（准星方向锁定）');
+  stub.fireCanvas('mousedown', { button: 2 });                     // 起手中点右键
   player.update(STEP, input, game);
-  ok(player.combat.phase === 'GUARD_RELEASE' &&
-     Math.abs(player.combat._coolDur - STEP * 5) < 1e-9,
-     '松开 → manual 冷却 = 已防御时长（5 帧）');
-  // 冷却期再按 → 不进 GUARD + guard_denied 负反馈（冷却尚未走完）
-  const q0 = fxQ.length;
-  stub.fireCanvas('mousedown', { button: 2 });
+  ok(player.combat.phase === 'blade_windup', '非 IDLE 出锤被拒（攻击状态槽互斥）');
+  player.combat.update(0.08);                                      // 起手转判定
+  player.combat.update(0.07);                                      // 判定转后摇
+  ok(player.combat.phase === 'blade_recovery', '判定结束进后摇');
+  stub.fireCanvas('mousedown', { button: 0 });
   player.update(STEP, input, game);
-  ok(player.combat.phase === 'GUARD_RELEASE' &&
-     fxQ.length > q0 && fxQ[fxQ.length - 1].type === 'guard_denied',
-     '冷却期按右键：拒绝 + 50ms 暗淡负反馈');
-  stub.fireWin('keyup', { button: 2 });
-  // 冷却期可移动（仍在 5 帧冷却内）
-  stub.fireWin('keydown', { code: 'KeyD', preventDefault() {} });
-  const x0 = player.x;
+  ok(player.combat.phase === 'blade_recovery', '刀冷却期内（270ms 未走完）再点无效');
+  for (let i = 0; i < 8; i++) player.update(STEP, input, game);    // 后摇 120ms + 冷却走完
+  stub.fireCanvas('mousedown', { button: 0 });
   player.update(STEP, input, game);
-  ok(player.x > x0 && player.combat.phase === 'GUARD_RELEASE', 'GUARD_RELEASE 冷却期可移动');
-  stub.fireWin('keyup', { code: 'KeyD' });
-
+  ok(player.combat.phase === 'blade_windup', '冷却完毕可再出刀');
   const evs = rec.finalize().events;
-  ok(evs.length >= 1 && evs[0].type === 'guard_begin' && evs[0].t === 0,
-     'guard_begin 事件 t 与轨迹帧同源（首帧 t=0）');
-  ok(evs.some(e => e.type === 'guard_end'), 'guard_end 已记录（松开帧）');
+  ok(evs.length === 2 && evs[0].type === 'blade' && evs[1].type === 'blade',
+     '两次成功出刀均录制（被拒的 hammer 不录）');
+  ok(evs[0].dirAngle === 0, 'blade 事件 dirAngle === 0（角度契约，回放镜像用）');
 }
 
-/* ---------- T6 Player 冲撞集成（v2.1 50ms 起手） ---------- */
-console.log('[T6] Player 冲撞集成：输入驱动 + 录制角 + 命中回归');
+/* ---------- T6 Player 挥刀集成（v4.0 突进 63px + 命中回归） ---------- */
+console.log('[T6] Player 挥刀集成：输入驱动 + 突进 63px + 刀命中几何回归');
 {
   const input = new Input(stub.canvas);
   const rec = new Recorder(); rec.begin();
@@ -440,30 +465,634 @@ console.log('[T6] Player 冲撞集成：输入驱动 + 录制角 + 命中回归'
   player.combat.onAction = (type, ang, t) => rec.recordAction(type, ang, t);
   const game = { tick: 0, fx: { queue: [] } };
 
+  stub.fireCanvas('mousemove', { clientX: 1130, clientY: 360 });   // 准星右
   stub.fireWin('keydown', { code: 'KeyD', preventDefault() {} });
   stub.fireCanvas('mousedown', { button: 0 });
   player.update(STEP, input, game);
-  ok(player.combat.phase === 'CHARGE_WINDUP' && player.facing === 0,
-     'KeyD+左键 → CHARGE_WINDUP，facing=0');
-  player.update(0.05, input, game);                   // 累计 ≥50ms → ACTIVE
-  ok(player.combat.phase === 'CHARGE_ACTIVE', '起手 50ms 后进入判定帧');
-  ok(Math.abs(player.combat.dashTo.x - (230 + 168)) < 1e-6, 'dashTo = (398, 360)');
-  player.update(0.1, input, game);                    // ACTIVE 走完
-  ok(player.combat.phase === 'CHARGE_RECOVERY' && Math.abs(player.x - 398) < 1e-6,
-     '冲撞终点 x=398（168px）');
+  ok(player.combat.phase === 'blade_windup' && Math.abs(player.facing) < 1e-9,
+     'KeyD+左键 → blade_windup，facing=0');
+  player.update(0.08, input, game);                   // 累计 ≥80ms → ACTIVE
+  ok(player.combat.phase === 'blade_active', '起手 80ms 后进入判定帧');
+  ok(Math.abs(player.combat.dashTo.x - (230 + 63)) < 0.5, 'dashTo ≈ (293, 360)（900×0.070 突进）');
+  player.update(0.07, input, game);                   // ACTIVE 走完
+  ok(player.combat.phase === 'blade_recovery' && Math.abs(player.x - 293) < 0.5,
+     '突进终点 x≈293（63px）');
 
-  const chargeEv = rec.finalize().events.find(e => e.type === 'charge');
-  ok(!!chargeEv && chargeEv.dirAngle === 0, '录制 charge 事件 dirAngle === 0（角度契约）');
+  const chargeEv = rec.finalize().events.find(e => e.type === 'blade');
+  ok(!!chargeEv && chargeEv.dirAngle === 0, '录制 blade 事件 dirAngle === 0（角度契约）');
 
-  const near = mkBall(428, 360, Math.PI);
-  const far = mkBall(493, 360, Math.PI);
-  const probe = mkBall(398, 360, 0);
-  probe.combat.startCharge({ x: 1, y: 0 }, 0);
-  probe.combat.update(0.05);
-  ok(checkChargeHit(probe, near) === 'hit', 'ACTIVE 下 30px 内目标 hit');
-  ok(checkChargeHit(probe, far) === null, 'ACTIVE 下 95px 外目标不命中（NaN 假阳性回归）');
+  const near = mkBall(330, 360, Math.PI);
+  const far = mkBall(560, 360, Math.PI);
+  const probe = mkAttacker(293, 360, 0, 'blade');
+  ok(checkAttackHit(probe, near) === 'blade', '判定帧下 37px 内目标 hit');
+  ok(checkAttackHit(probe, far) === null, '判定帧下 267px 外目标不命中（刃区 128+32 补偿外）');
 }
 
+/* ---------- T11 灰显 + HUD 文案 + v2.2 血条常量 + v4.0 数值 ---------- */
+console.log('[T11] isModeAvailable（IA）+ hudLines 逐字 + HPBAR 布局 + v4.0 刀锤/增亮/爆裂常量');
+{
+  const store = new LocalGhostStore();
+  ok(isModeAvailable('solo', store) && isModeAvailable('self', store) &&
+     isModeAvailable('quit', store), 'solo/self/quit 常亮');
+  ok(isModeAvailable('online', store), 'v3.0：联机常亮（PAIR 配对流）');
+  ok(!isModeAvailable('ai', store), 'AI 菜单项已随用户指令删除（isModeAvailable 返回 false）');
+  ok(!isModeAvailable('boss', store) && !isModeAvailable('boss_online', store) &&
+     !isModeAvailable('boss_final', store),
+     'v3.0：旧 boss 二级入口与联机三池 act 已失效（返回 false）');
+  ok(!isModeAvailable('boss_solo', store), 'boss_solo 空池灰显');
+  ok(JSON.stringify(hudLines('self', { defeatedPlayers: 5 })) ===
+     JSON.stringify(['已打败玩家数：5/20']), 'self HUD 逐字');
+  ok(JSON.stringify(hudLines('boss_solo', { challengedSuccess: 3, defeatedPlayers: 7 })) ===
+     JSON.stringify(['被挑战成功数：3/20', '已打败玩家数：7']), '单机boss HUD 逐字');
+  ok(hudLines('solo', null).length === 0, 'solo 无 DOM HUD 行');
+
+  // v2.2 血条布局常量（fx.md v2.2 §D）
+  const HB = CONFIG.HPBAR;
+  ok(HB.W === 24 && HB.H === 10 && HB.GAP === 6 && HB.Y === 24 &&
+     HB.CX_P === 340 && HB.CX_G === 940,
+     '血条常量：3 格 24×10 间隔 6，组中心 x=340/940，y=24');
+  const total = HB.W * 3 + HB.GAP * 2;
+  ok(HB.CX_P - total / 2 > 0 && HB.CX_P + total / 2 < 640 - 60 &&
+     HB.CX_G - total / 2 > 640 + 60 && HB.CX_G + total / 2 < CONFIG.VIEW.W,
+     '血条组与「第 N 关」(x=640) 及画布边缘不重叠');
+
+  // v4.0 数值锁定（attack.md v4.0 §2 + fx.md v4.0）
+  ok(CONFIG.HP.MAX === 3 && CONFIG.CLASH.DURATION === 0.300 &&
+     CONFIG.CLASH.KNOCKBACK === 60 && CONFIG.CLASH.KNOCKBACK_DUR === 0.150,
+     'v2.2 数值沿用：maxHP=3 / 刀刀弹开 300ms / 击退 60px/150ms');
+  ok(CONFIG.BALL.R === 32 && CONFIG.BOUND.INSET === 32, 'v4.0 体型 32 / 边界内缩 32');
+  ok(CONFIG.BLADE.RADIUS === 128 && Math.abs(CONFIG.BLADE.HALF_ANGLE - Math.PI / 4) < 1e-9 &&
+     CONFIG.HAMMER.RADIUS === 96 && Math.abs(CONFIG.HAMMER.HALF_ANGLE - Math.PI / 6) < 1e-9,
+     'v4.0 攻击区扇形：刀 128px/±45°，锤 96px/±30°');
+  ok(CONFIG.KILL_HITSTOP === 0.200 && CONFIG.HITSTOP === 0.120,
+     'v4.0 hitstop：秒杀 200ms / 普通死亡与 DRAW 复活 120ms');
+  ok(CONFIG.SHAKE.BLADE === 4 && CONFIG.SHAKE.HAMMER === 8, 'v4.0 震屏：出刀 4px / 落锤 8px');
+  ok(CONFIG.COLOR.PLAYER === '#FFF8E7' && CONFIG.COLOR.GHOST === '#9FE8FF',
+     'v4.0 球体增亮：玩家亮暖白 / 幽灵冷青亮芯');
+  ok(CONFIG.FX.GLOW.PLAYER.R === 70 && CONFIG.FX.GLOW.PLAYER.A === 0.85 &&
+     CONFIG.FX.GLOW.GHOST.R === 70,
+     '双层外晕 r70 α0.85');
+  ok(CONFIG.FX.BLADE_ARC.LIFE === 0.180 && CONFIG.FX.BLADE_ARC.WIDTH === 24 &&
+     CONFIG.FX.BLADE_AFTER.N === 2 && CONFIG.FX.BLADE_AFTER.GAP === 0.025 &&
+     CONFIG.FX.BLADE_AFTER.LIFE === 0.2,
+     '挥刀 FX 常量：弧 180ms/宽24 + 残影 2 段/25ms 间隔/200ms');
+  ok(CONFIG.FX.HAMMER_ARC.LIFE === 0.250 && CONFIG.FX.HAMMER_ARC.WIDTH === 32 &&
+     CONFIG.FX.HAMMER_RING.R1 === 70 && CONFIG.FX.HAMMER_CHARGE.N === 12,
+     '重锤 FX 常量：弧 250ms/宽32 + 冲击环 r1=70 + 汇聚 12 枚');
+  ok(CONFIG.FX.KILL.RING.R1 === 90 && CONFIG.FX.KILL.RING2.R1 === 130,
+     '秒杀爆裂双层环 r1=90/130');
+  ok(CONFIG.FX.SPEEDLINES === undefined && CONFIG.FX.AFTERIMAGE === undefined &&
+     CONFIG.FX.WINDUP === undefined && CONFIG.FX.BREAK === undefined &&
+     CONFIG.FX.STUN === undefined && CONFIG.FX.DENY === undefined,
+     'v3.x 冲撞系 FX 参数组已从 CONFIG 删除');
+  ok(CONFIG.HIT.FLASH === 0.080 && CONFIG.HIT.SHAKE === 3 && CONFIG.HIT.LOW_PULSE === 0.600,
+     'v2.2 受击反馈：白闪 80ms / 微震 3px / 低血脉动 600ms');
+}
+
+/* ---------- T12 Match 集成：无限链 / 败局 / 刀刀弹开 / abandon（v4.0） ---------- */
+console.log('[T12] Match 集成（solo 三刀无限链 / self charge 幽灵败局 / 刀刀 STAGGER / abandon）');
+{
+  const mkDeps = () => ({ input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } });
+
+  // —— (a) solo 无限链：木桩 HP=3 三刀击碎 → AUTO_ADVANCE → 第 2 关镜像 → 第 3 关 = 上关胜利段 ——
+  {
+    const deps = mkDeps();
+    const seedCalls = [];
+    const m = new Match(deps, { mode: 'solo', opp: 'dummy',
+                                onLevelWin: (n, rep) => seedCalls.push({ n, rep }) });
+    ok(m.level === 'PLAY' && m.levelN === 1 && m.dummy !== null,
+       'solo 从第 1 关木桩起（固定站位）');
+    ok(m.player.x === CONFIG.SPAWN.PLAYER.x && m.dummy.x === CONFIG.SPAWN.DUMMY.x,
+       '固定站位：玩家 (230,360) / 木桩 (1050,360)');
+    stub.fireCanvas('mousemove', { clientX: 1279, clientY: 360 });   // 准星钉在画布最右（玩家逼近中 facing 恒朝 +x）
+    stub.fireWin('keydown', { code: 'KeyD', preventDefault() {} });  // 逼近木桩（碰撞推挤后停在 64px 处）
+    let ticks = 0;
+    while (m.level === 'PLAY' && ticks < 800) {             // 每帧点左键连击：木桩 HP=3
+      stub.fireCanvas('mousedown', { button: 0 });
+      m.update(STEP); ticks++;
+    }
+    stub.fireWin('keyup', { code: 'KeyD' });
+    ok(m.level === 'AUTO_ADVANCE' && m.dummy.combat.hp === 0,
+       '第 1 关：三刀击碎木桩（HP=3）→ AUTO_ADVANCE（' + ticks + ' 帧）');
+    ok(seedCalls.length === 1 && seedCalls[0].n === 1, 'Match 层每关上报 onLevelWin（第 1 关）');
+    ok(m.mirrorReplay && m.mirrorReplay.trajectory.length > 0 &&
+       m.mirrorReplay.events.some((e) => e.type === 'blade'),
+       '教学段录制闭合（blade 事件）→ 第 2 关幽灵来源');
+    ticks = 0;
+    while (m.level === 'AUTO_ADVANCE' && ticks < 120) { m.update(STEP); ticks++; }
+    ok(m.level === 'PLAY' && m.levelN === 2 && m.ghost !== null,
+       '1.2s 横幅后自动进第 2 关（无需确认输入）');
+    ok(m.ghost.replay === m.mirrorReplay, '第 2 关幽灵 = 教学段录制（ServeProvider）');
+    ok(m.recorder.tickCount <= 5, '新尝试段从帧 0 起录（教学段不混入）');
+    // 白盒驱动：击杀第 2 关幽灵 → 胜利段闭合 → 第 3 关
+    const winRep = m.recorder.snapshot();               // 预期胜利段内容（快照先取）
+    m._onOpponentDead(m.ghost, 2);                      // 内部 snapshot → lastWinReplay
+    ok(m.level === 'AUTO_ADVANCE' && seedCalls.length === 2 && seedCalls[1].n === 2,
+       '第 2 关击杀 → 上报胜利段（播种通道）');
+    ticks = 0;
+    while (m.level === 'AUTO_ADVANCE' && ticks < 120) { m.update(STEP); ticks++; }
+    ok(m.levelN === 3 && m.ghost.replay === m.lastWinReplay,
+       '第 3 关幽灵 = lastWinReplay（ServeProvider 同引用）');
+    ok(serializeReplay(m.lastWinReplay) === serializeReplay(winRep),
+       '第 3 关幽灵 = 第 2 关胜利段内容（快照一致）');
+    // R 重试同源：玩家 HP 归 0 → DEATH → R
+    m._onOpponentDead(m.ghost, 3);                      // 推进到第 4 关准备
+    ticks = 0; while (m.level === 'AUTO_ADVANCE' && ticks < 120) { m.update(STEP); ticks++; }
+    const replay4 = m.ghost.replay;
+    m.player.combat.hit(); m.player.combat.hit(); m.player.combat.hit();   // 玩家 HP 归 0
+    m.slowTimer = 0; m.level = 'DEATH';
+    m.prevR = false;
+    stub.fireWin('keydown', { code: 'KeyR', preventDefault() {} });
+    m.update(STEP);
+    stub.fireWin('keyup', { code: 'KeyR' });
+    ok(m.level === 'PLAY' && m.levelN === 4 && m.ghost.replay === replay4,
+       'R 重试当前关：幽灵数据不变（同源）');
+    ok(m.player.combat.hp === 3 && m.ghost.combat.hp === 3, 'R 重试双方 HP 重置 3');
+    ok(m.recorder.tickCount <= 5, '重试 = 新录制段（失败段丢弃，仅胜利段作幽灵源）');
+    ok(seedCalls.length === 3 && seedCalls.every((c) => c.n >= 1 && c.n <= 3),
+       'Match 层每关击杀均上报 onLevelWin（播种过滤在 GameScreen/seedOnLevelWin）');
+  }
+
+  // —— (b) 播种收窄：seedOnLevelWin 仅第 2 关 + 空池条件 ——
+  {
+    const store = new LocalGhostStore();
+    const rep = { duration: 1, trajectory: new Float32Array(10), events: [] };
+    ok(seedOnLevelWin(store, 1, rep) === false && store.list('self').length === 0,
+       '第 1 关胜利不播种');
+    ok(seedOnLevelWin(store, 3, rep) === false && store.list('self').length === 0,
+       '第 3 关胜利不播种（无限链不污染资产池）');
+    ok(seedOnLevelWin(store, 2, rep) === true && store.list('self').length === 1,
+       '第 2 关胜利 + 空池 → 播种挑战自我第 1 关');
+    ok(seedOnLevelWin(store, 2, rep) === false && store.list('self').length === 1,
+       '已有存档 → 不重复播种');
+  }
+
+  // —— (c) self 败局：历史 charge 幽灵（v4.0 映射挥刀）命中玩家 3 次 → HP 归 0 → finish(lose) ——
+  {
+    const deps = mkDeps();
+    let ended = null;
+    const n = 600;
+    const gx = 990;                                     // 镜像后幽灵位 = 1280−990 = 290（玩家 230 右侧 60px）
+    const traj = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) { traj[2 * i] = gx; traj[2 * i + 1] = 360; }
+    const events = [];
+    for (let k = 0; k < 5; k++) events.push({ t: 31 + k * 120, type: 'charge', dirAngle: 0 });
+    const m = new Match(deps, { mode: 'self', opp: 'ghost',
+                                replay: { duration: n * CONFIG.STEP, trajectory: traj, events },
+                                onEnd: (r, rep, s) => { ended = { r, rep, s }; } });
+    ok(m.level === 'PLAY' && m.levelN === 1 && m.ghost !== null, 'self 单关对局（无教学关）');
+    m.update(STEP);
+    ok(Math.abs(m.ghost.x - (CONFIG.VIEW.W - gx)) <= 2.5,
+       '镜像轨迹：录制 x=990 → 幽灵 x=290（±2px 碰撞分离；逐帧 x\'=1280−x）');
+    let ticks = 0;
+    while (!m.ended && ticks < 600) { m.update(STEP); ticks++; }
+    ok(m.ended && ended && ended.r === 'lose', '被幽灵 3 刀命中（HP 归 0）→ finish(lose)');
+    ok(m.player.combat.hp === 0, '玩家 HP=0 才进死亡流程');
+    ok(ended.rep && ended.rep.trajectory.length > 0, '败局产出 replay（分段录制）');
+    // 镜像方向联动：dirAngle=0（朝右）→ 幽灵挥刀 facing=π（朝玩家侧）
+    ok(Math.abs(m.ghost.facing - Math.PI) < 1e-6 || m.ghost.combat.phase === 'idle',
+       '幽灵挥刀方向镜像朝玩家侧（dirAngle 0 → π）');
+  }
+
+  // —— (d) 刀刀弹开：同 tick 起手互为刃区 → 双方 STAGGER、HP 不减、无 DRAW ——
+  {
+    const deps = mkDeps();
+    let endCalls = 0;
+    const n = 600;
+    const traj = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) { traj[2 * i] = 248; traj[2 * i + 1] = 360; }   // 镜像后幽灵位 1032
+    const m = new Match(deps, { mode: 'self', opp: 'ghost',
+                                replay: { duration: n * CONFIG.STEP, trajectory: traj, events: [] },
+                                onEnd: () => { endCalls++; } });
+    m.update(STEP);                                     // 幽灵就位 (1032,360)，玩家 (230,360)
+    // 白盒摆位：玩家拉到幽灵左侧 64px（本体分离距），同 tick 互出刀
+    m.player.x = 968; m.player.y = 360;
+    const t0 = m.tick;
+    m.player.combat.startBlade({ x: 1, y: 0 }, t0);
+    m.ghost.combat.startBlade({ x: -1, y: 0 }, t0);
+    let ticks = 0;
+    while (!(m.player.combat.phase === 'stagger' && m.ghost.combat.phase === 'stagger') && ticks < 60) {
+      m.update(STEP); ticks++;
+    }
+    ok(m.player.combat.phase === 'stagger' && m.ghost.combat.phase === 'stagger',
+       '同 tick 互刀 → ① 刃区互交 → 双方进 STAGGER 弹开（无 DRAW 触发）');
+    ok(m.player.combat.hp === 3 && m.ghost.combat.hp === 3, '刀刀弹开双方 HP 不减');
+    ok(m.level === 'PLAY' && endCalls === 0, '弹开不掉血、无结算');
+    ok(len(m.ghost.x - m.player.x, m.ghost.y - m.player.y) >= 64 - 1e-6,
+       '弹开后位置分离无重叠（分离距 64）');
+    ticks = 0;
+    while ((m.player.combat.phase === 'stagger' || m.ghost.combat.phase === 'stagger') && ticks < 40) {
+      m.update(STEP); ticks++;
+    }
+    ok(m.player.combat.phase === 'idle' && m.ghost.combat.phase === 'idle',
+       '300ms 弹开结束自然恢复行动');
+  }
+
+  // —— (e) abandon ——
+  {
+    const deps = mkDeps();
+    let endCalls = 0;
+    const m = new Match(deps, { mode: 'solo', opp: 'dummy', onEnd: () => { endCalls++; } });
+    m.abandon();
+    ok(m.ended === true && endCalls === 0, 'abandon：录制作废、不计任何数');
+  }
+}
+
+/* ---------- T13 攻击特效运行时断言（v4.0：挥刀月牙/残影/锤汇聚/锤弧/秒杀双环/格挡消散） ---------- */
+console.log('[T13] FX 运行时：挥刀弧光 128px 双层 / 残影 2 段 22.5px / 锤汇聚 12 枚收敛 / 锤弧 96px+环 / 秒杀双环 r1=130 / 小爆裂无环 / fade 40ms');
+{
+  const fx = new FXSystem();
+  // —— (a) blade_swing：宽月牙 128px 弧宽 24，寿命 180ms + 火花 8~12 + 震屏 4px ——
+  fx.queue.push({ type: 'blade_swing', x: 100, y: 100, ang: 0, color: '#FFF8E7' });
+  fx.flush();
+  ok(fx.arcs.length === 1 && Math.abs(fx.arcs[0].radius - CONFIG.BLADE.RADIUS) < 1e-9 &&
+     Math.abs(fx.arcs[0].width - CONFIG.FX.BLADE_ARC.WIDTH) < 1e-9 &&
+     Math.abs(fx.arcs[0].maxLife - 0.180) < 1e-9, '挥刀弧光：radius=128 / width=24 / 180ms');
+  ok(fx.arcs[0].glow === true, '挥刀弧光 glow 双层标记');
+  const sparks = fx.pool.filter((p) => p.alive && p.kind === 'dot' && p.life > 0);
+  ok(sparks.length >= CONFIG.FX.BLADE_SPARK.N_MIN && sparks.length <= CONFIG.FX.BLADE_SPARK.N_MAX,
+     '刃缘火花 8~12 粒');
+  ok(fx.shake > 0, '挥刀震屏 4px');
+  // —— (b) blade_afterimages：2 段沿突进方向 22.5px/段（900×0.025），alpha 0.4/0.25，寿命 200ms ——
+  fx.queue.push({ type: 'blade_afterimages', x: 200, y: 100, ang: 0, r: CONFIG.BALL.R, color: '#FFF8E7' });
+  fx.flush();
+  ok(fx.afterimages.length === CONFIG.FX.BLADE_AFTER.N, '挥刀残影 2 段入队');
+  ok(Math.abs(fx.afterimages[0].alpha - 0.4) < 1e-9 && Math.abs(fx.afterimages[1].alpha - 0.25) < 1e-9,
+     '残影透明度 0.4/0.25');
+  const stepPx = CONFIG.BLADE.LUNGE_SPEED * CONFIG.FX.BLADE_AFTER.GAP;
+  ok(Math.abs(stepPx - 22.5) < 1e-9 &&
+     Math.abs(fx.afterimages[1].x - (200 + stepPx)) < 1e-9 && fx.afterimages[1].y === 100,
+     '残影沿方向 22.5px/段（900×0.025）');
+  ok(Math.abs(fx.afterimages[0].maxLife - 0.2) < 1e-9, '残影寿命 200ms');
+  fx.update(0.25);
+  ok(fx.afterimages.length === 0 && fx.arcs.length === 0, '残影/弧光寿命尽后消退');
+
+  // —— (c) hammer_charge：12 枚汇聚粒子，位置随寿命向球心收敛 ——
+  const fx2 = new FXSystem();
+  fx2.queue.push({ type: 'hammer_charge', x: 300, y: 300 });
+  fx2.flush();
+  const nCharge = fx2.pool.filter((p) => p.alive && p._home).length;
+  ok(nCharge === CONFIG.FX.HAMMER_CHARGE.N, '锤蓄力汇聚粒子 12 枚');
+  fx2.update(CONFIG.FX.HAMMER_CHARGE.LIFE * 0.5);
+  const p0 = fx2.pool.find((p) => p._home);
+  const d1 = Math.hypot(p0.x - p0._home.x, p0.y - p0._home.y);
+  ok(d1 > 0, '半程时仍在球体外侧');
+  fx2.update(CONFIG.FX.HAMMER_CHARGE.LIFE * 0.25);
+  const d2 = Math.hypot(p0.x - p0._home.x, p0.y - p0._home.y);
+  ok(Math.abs(d2 - d1 / 2) < 0.5, '位置随寿命线性向球心收敛（remain 减半距离减半）');
+
+  // —— (d) hammer_strike：锤弧 96px 弧宽 32 寿命 250ms + 冲击环 r0→70 + 震屏 8px ——
+  fx2.queue.push({ type: 'hammer_strike', x: 300, y: 300, ang: Math.PI / 2 });
+  fx2.flush();
+  ok(fx2.arcs.length === 1 && Math.abs(fx2.arcs[0].radius - CONFIG.HAMMER.RADIUS) < 1e-9 &&
+     Math.abs(fx2.arcs[0].width - CONFIG.FX.HAMMER_ARC.WIDTH) < 1e-9 &&
+     Math.abs(fx2.arcs[0].maxLife - 0.250) < 1e-9 && fx2.arcs[0].glow === false,
+     '锤击弧光：radius=96 / width=32 / 250ms / 单层');
+  ok(fx2.rings.length === 1 && Math.abs(fx2.rings[0].r1 - CONFIG.FX.HAMMER_RING.R1) < 1e-9 &&
+     Math.abs(fx2.rings[0].maxLife - 0.250) < 1e-9, '落点冲击环 r0→70 / 250ms');
+  ok(fx2.shake > 0, '落锤震屏 8px');
+
+  // —— (e) burst kill：秒杀爆裂 24 粒 + 双层环（r1=90/130） ——
+  const fx3 = new FXSystem();
+  fx3.queue.push({ type: 'burst', x: 500, y: 300, kill: true, color: '#FFF8E7' });
+  fx3.flush();
+  const killParts = fx3.pool.filter((p) => p.alive && p.kind === 'dot' && p.life > 0).length;
+  ok(killParts >= CONFIG.FX.KILL.N_MIN, '秒杀爆裂 ≥24 粒');
+  ok(fx3.rings.length === 2 &&
+     Math.abs(fx3.rings[0].r1 - CONFIG.FX.KILL.RING.R1) < 1e-9 &&
+     Math.abs(fx3.rings[1].r1 - CONFIG.FX.KILL.RING2.R1) < 1e-9 &&
+     Math.abs(fx3.rings[0].maxLife - 0.25) < 1e-9 && Math.abs(fx3.rings[1].maxLife - 0.35) < 1e-9,
+     '秒杀双层冲击环 r1=90/130（250ms/350ms）');
+
+  // —— (f) burst small：命中火花 8~10 粒零环零震屏 ——
+  const fx4 = new FXSystem();
+  fx4.queue.push({ type: 'burst', x: 500, y: 300, small: true, color: '#FFF8E7', shake: 0 });
+  fx4.flush();
+  const smallParts = fx4.pool.filter((p) => p.alive && p.kind === 'dot' && p.life > 0).length;
+  ok(smallParts >= 8 && smallParts <= 10, '命中火花 8~10 粒');
+  ok(fx4.rings.length === 0 && fx4.shake === 0, '小爆裂无环零震屏');
+
+  // —— (g) blade_swing fade：无效格挡光弧消散 40ms，无火花无震屏 ——
+  const fx5 = new FXSystem();
+  fx5.queue.push({ type: 'blade_swing', x: 100, y: 200, ang: 0, color: '#fff', fade: true });
+  fx5.flush();
+  ok(fx5.arcs.length === 1 && Math.abs(fx5.arcs[0].maxLife - 0.040) < 1e-9, '格挡消散：弧光寿命 40ms');
+  ok(fx5.pool.filter((p) => p.alive && p.kind === 'dot' && p.life > 0).length === 0 && fx5.shake === 0,
+     'fade 无火花零震屏');
+  fx5.update(0.05);
+  ok(fx5.arcs.length === 0, '40ms 后弧光消退');
+
+  // —— (h) v3.x 通道防复活 ——
+  ok(fx.speedlines === undefined && fx.halos === undefined, 'speedlines/halos 通道已从 FXSystem 删除');
+}
+
+/* ---------- T14 OrbAI 契约（v4.0：快照冻结+bladeZone / blade|hammer 虚拟光标一次消费 / 异常降级 / 内置 AI 策略） ---------- */
+console.log('[T14] OrbAI 契约：snapshotView v4.0 深冻结+bladeZone / AIInput blade/hammer 同通路 / 异常降级 / 内置 AI 策略');
+{
+  const mkIdle14 = (seat) => new AIInput(
+    { name: 'idle', think() { return { move: { x: 0, y: 0 }, blade: false, hammer: false }; } }, seat);
+  // —— (a) snapshotView v4.0：字段 + 视角切换 + 深冻结 + bladeZone ——
+  {
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    const m = new Match(deps, { mode: 'demo', p1Input: new AIInput(createBuiltinAI(), 'P1'),
+                                p2Input: new AIInput(createBuiltinAI(), 'P2') });
+    ok(m.player.x === CONFIG.SPAWN.PLAYER.x && m.p2.x === CONFIG.SPAWN.GHOST.x,
+       'demo 站位：P1 (230,360) vs P2 (1050,360)');
+    ok(m.player.combat.maxHP === 3 && m.p2.combat.maxHP === 3, 'demo 双方 HP=3');
+    const s1 = m.snapshotView('P1');
+    const s2 = m.snapshotView('P2');
+    ok(s1.self.x === m.player.x && s1.opp.x === m.p2.x &&
+       s2.self.x === m.p2.x && s2.opp.x === m.player.x,
+       'seat 视角切换：self/opp 互为镜像引用位');
+    ok(s1.self.hp === 3 && s1.opp.hp === 3 && s1.tick === m.tick, '快照含 hp / tick');
+    ok(s1.self.radius === CONFIG.BALL.R && s1.self.radius === 32, '实体 radius=32（v4.0 体型）');
+    ok(s1.self.bladeCooldown === 0 && s1.self.hammerCooldown === 0, '无冷却时双冷却=0（剩余 ms）');
+    ok(s1.self.bladeZone === null && s1.opp.bladeZone === null, '非刀判定帧 bladeZone=null');
+    ok(s1.arena.BALL_R === 32 && s1.arena.RADIUS === 32 &&
+       s1.arena.BLADE_RADIUS === CONFIG.BLADE.RADIUS &&
+       s1.arena.BLADE_HALF_ANGLE === CONFIG.BLADE.HALF_ANGLE &&
+       s1.arena.HAMMER_RADIUS === CONFIG.HAMMER.RADIUS &&
+       s1.arena.HAMMER_HALF_ANGLE === CONFIG.HAMMER.HALF_ANGLE &&
+       s1.arena.W === CONFIG.VIEW.W && s1.arena.H === CONFIG.VIEW.H,
+       'arena v4.0 常量齐备（BALL_R=32/刀锤半径半角/W/H）');
+    ok(s1.arena.CHARGE_DISTANCE === undefined && s1.self.chargeDir === undefined &&
+       s1.self.guardCd === undefined && s1.self.invincible === undefined,
+       'v3.x 字段移除：chargeDir/guardCd/invincible/CHARGE_DISTANCE 不在快照');
+    // 白盒置刀判定帧 → 对手视角 bladeZone 非空
+    m.player.combat.phase = CombatState.BLADE_ACTIVE;
+    m.player.facing = Math.PI / 4;
+    const s3 = m.snapshotView('P2');
+    ok(s3.opp.bladeZone !== null && Math.abs(s3.opp.bladeZone.dirAngle - Math.PI / 4) < 1e-9 &&
+       s3.opp.bladeZone.radius === CONFIG.BLADE.RADIUS &&
+       s3.opp.bladeZone.halfAngle === CONFIG.BLADE.HALF_ANGLE,
+       'blade_active 时 bladeZone={dirAngle,128,π/4}');
+    let hacked = false;
+    try {
+      s1.self.x = 999; s1.opp.phase = 'HACK'; s1.arena.W = 0;
+      if (s3.opp.bladeZone) s3.opp.bladeZone.dirAngle = 9;
+    } catch (e) { /* 严格模式抛错也算冻结成功 */ }
+    hacked = s1.self.x === 999 || s1.opp.phase === 'HACK' || s1.arena.W === 0;
+    ok(!hacked && m.player.x !== 999, '快照深冻结：AI 篡改快照不影响世界（deepFreeze）');
+  }
+
+  // —— (b) AIInput 同通路：think 决策经 Player 消费触发挥刀 ——
+  {
+    let asked = 0;
+    const impl = { name: 'stub', think() { asked++; return { move: { x: 1, y: 0 }, blade: { x: 50, y: 0 }, hammer: false }; } };
+    const ai = new AIInput(impl, 'P1');
+    const fakeMatch = { snapshotView: (seat) => ({ tick: 0,
+      self: { x: 0, y: 0, phase: 'idle', hp: 3, radius: 32, bladeCooldown: 0, hammerCooldown: 0, bladeZone: null },
+      opp: { x: 100, y: 0, phase: 'idle', hp: 3, radius: 32, bladeCooldown: 0, hammerCooldown: 0, bladeZone: null },
+      arena: { W: 1280, H: 720, BALL_R: 32, RADIUS: 32, BLADE_RADIUS: 128, BLADE_HALF_ANGLE: Math.PI / 4,
+               HAMMER_RADIUS: 96, HAMMER_HALF_ANGLE: Math.PI / 6 } }) };
+    ai.beginTick(fakeMatch);
+    ok(asked === 1, 'beginTick 每 tick 恰好 think 一次（快照在消费前生成）');
+    ok(ai.getMoveAxis().x === 1, 'AI 决策经 Input 同接口消费（move）');
+    const aimV = ai.getAim({ x: 0, y: 0 });
+    ok(Math.abs(aimV.x - 1) < 1e-9 && Math.abs(aimV.y) < 1e-9, 'AI 虚拟光标 → getAim 单位向量（与鼠标同管线）');
+    ok(ai.consumeBlade() === true && ai.consumeBlade() === false, 'blade 帧内一次消费');
+    ok(ai.isDown('KeyR') === false, 'AI 无按键语义（isDown 恒 false）');
+    /* Match 集成：AI 输入驱动 Player 挥刀（p1Input 通路） */
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    const m = new Match(deps, { mode: 'demo', p1Input: new AIInput(impl, 'P1'), p2Input: mkIdle14('P2') });
+    m.update(STEP);                     // 顶部 beginTick → Player.update 消费 blade
+    ok(m.player.combat.phase === 'blade_windup', 'AI blade 经 Player 同通路触发挥刀');
+    ok(m.p2.combat.phase === 'idle', 'P2 静止 AI 不受影响');
+  }
+
+  // —— (c) hammer 决策同通路 ——
+  {
+    const impl = { name: 'hammerAI', think() { return { move: { x: 0, y: 0 }, blade: false, hammer: { x: 0, y: 0 } }; } };
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    const m = new Match(deps, { mode: 'demo', p1Input: new AIInput(impl, 'P1'), p2Input: mkIdle14('P2') });
+    m.update(STEP);
+    ok(m.player.combat.phase === 'hammer_windup', 'AI hammer 经 Player 同通路触发重锤');
+    ok(Math.abs(m.player.combat.hammerCooldown - (CONFIG.HAMMER.COOLDOWN - STEP)) < 1e-9,
+       '锤冷却 900ms 出招即置（一帧后剩 883ms）');
+  }
+
+  // —— (d) 异常降级：think 抛错 → 空输入 + 不判负不崩局（ADR-009） ——
+  {
+    const bad = { name: 'bad', think() { throw new Error('boom'); } };
+    const ai = new AIInput(bad, 'P1');
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    let ended = null;
+    const m = new Match(deps, { mode: 'demo', p1Input: ai,
+                                p2Input: new AIInput(bad, 'P2'),
+                                onEnd: (s) => { ended = s; } });
+    let ticks = 0;
+    while (!m.ended && ticks < 120) { m.update(STEP); ticks++; }   // 跑 2s
+    ok(!m.ended && ticks === 120, '双 AI think 抛错 → 对局不崩不判负（持续空转）');
+    ok(m.player.combat.hp === 3 && m.p2.combat.hp === 3, '异常空输入不产生误伤');
+    ok(ai.getMoveAxis().x === 0 && ai.getMoveAxis().y === 0 &&
+       ai.consumeBlade() === false && ai.consumeHammer() === false, '异常帧输入 = 全空');
+  }
+
+  // —— (e) 内置 AI 策略 + compileAICode ——
+  {
+    const builtin = createBuiltinAI();
+    ok(builtin.name === '内置示例' && typeof builtin.think === 'function', '内置 AI 工厂');
+    const mkSnap = (dist, oppPhase, tick, selfCd) => ({
+      tick,
+      self: { x: 0, y: 0, phase: 'idle', hp: 3, radius: 32,
+              bladeCooldown: selfCd || 0, hammerCooldown: 0, bladeZone: null },
+      opp: { x: dist, y: 0, phase: oppPhase, hp: 3, radius: 32,
+             bladeCooldown: 0, hammerCooldown: 0, bladeZone: null },
+      arena: { W: 1280, H: 720, BALL_R: 32, RADIUS: 32, BLADE_RADIUS: 128, BLADE_HALF_ANGLE: Math.PI / 4,
+               HAMMER_RADIUS: 96, HAMMER_HALF_ANGLE: Math.PI / 6 },
+    });
+    let d = builtin.think(mkSnap(300, 'idle', 10));
+    ok(d.move.x === 1 && !d.blade, '远距 300px：追踪不出刀');
+    d = builtin.think(mkSnap(100, 'idle', 10));
+    ok(d.blade && typeof d.blade === 'object' && d.blade.x === 100 && d.blade.y === 0,
+       '近距 100px + 对手 idle → 刀连击（虚拟光标=对手坐标）');
+    d = builtin.think(mkSnap(100, 'dead', 10));
+    ok(!d.blade, '对手 dead → 不出刀');
+    d = builtin.think(mkSnap(100, 'idle', 10, CONFIG.BLADE.COOLDOWN));
+    ok(!d.blade, '自身刀冷却中 → 不出刀');
+    d = builtin.think(mkSnap(100, 'hammer_windup', 10));
+    ok(Math.abs(d.move.x) < 1e-9 && Math.abs(Math.abs(d.move.y) - 1) < 1e-9 && d.hammer === false,
+       '对手锤起手：切向绕后（连线垂直方向）且不赌锤');
+    d = builtin.think(mkSnap(100, 'hammer_active', 10));
+    ok(Math.abs(d.move.x) < 1e-9 && Math.abs(Math.abs(d.move.y) - 1) < 1e-9, '锤判定期同样绕后躲锤区');
+
+    const aiObj = compileAICode("{ name:'t', think(state){ return { move:{x:0,y:0}, blade:false, hammer:false }; } }");
+    ok(typeof aiObj.think === 'function' && aiObj.name === 't', '控制台代码串可编译为 AI 对象');
+    let threw = false;
+    try { compileAICode('({})'); } catch (e) { threw = true; }
+    ok(threw, '缺 think → 编译拒绝');
+    threw = false;
+    try { compileAICode('({think('); } catch (e) { threw = true; }
+    ok(threw, '语法错误 → 编译拒绝');
+  }
+}
+
+/* ---------- T15 无头对局（v4.0 刀锤版：Node 双 AI 跑到 match_end，零 DOM） ---------- */
+console.log('[T15] 无头双 AI 对局：内置 AI 刀连击对局到 match_end + HP=3 击杀路径 + 超时裁决');
+{
+  const mkIdle = (seat) => new AIInput(
+    { name: 'idle', think() { return { move: { x: 0, y: 0 }, blade: false, hammer: false }; } }, seat);
+  // —— (a) 内置 AI vs 静止 AI：追击+刀连击 → 3 次命中 → P1 胜（确定路径） ——
+  const run = (p1Spec, p2Spec, timeLimit) => {
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    let ended = null;
+    const m = new Match(deps, {
+      mode: 'demo',
+      p1Input: p1Spec, p2Input: p2Spec, timeLimit,
+      onEnd: (seat, replay, secs) => { ended = { seat, replay, secs }; },
+    });
+    let ticks = 0;
+    while (!m.ended && ticks < Math.ceil(timeLimit / STEP) + 60) { m.update(STEP); ticks++; }
+    return { m, ended, ticks };
+  };
+  const r = run(new AIInput(createBuiltinAI(), 'P1'), mkIdle('P2'), 20);
+  ok(r.ended !== null, '无头对局在时限内跑到 match_end（' + (r.ticks * STEP).toFixed(2) + 's）');
+  ok(r.ended.seat === 'P1', '内置 AI 追击静止对手 → P1 胜（seat 通道）');
+  ok(r.ended.replay === null, 'demo 收束不产 replay（零 Recorder）');
+  ok(r.m.p2.combat.phase === CombatState.DEAD && r.m.p2.combat.hp === 0,
+     '败者 HP=0 且进 DEAD（HP=3 刀击杀路径）');
+  ok(r.m.player.combat.hp > 0 && r.m.player.combat.hp <= 3, '胜者 HP 未归零');
+  ok(!r.m.recorder.recording, 'demo 对局零录制（recorder 未 begin）');
+
+  // —— (b) 双内置 AI 互战：60s 时限内必收束（对称 AI 可能相持 → 超时 DRAW 兜底亦为 match_end） ——
+  const r2v = run(new AIInput(createBuiltinAI(), 'P1'), new AIInput(createBuiltinAI(), 'P2'), 60);
+  ok(r2v.ended !== null && (r2v.ended.seat === 'P1' || r2v.ended.seat === 'P2' || r2v.ended.seat === null),
+     '双内置 AI 互战在 60s 内收束（' + (r2v.ticks * STEP).toFixed(1) + 's，seat=' + r2v.ended.seat + '）');
+  if (r2v.ended.seat === null) {        // 超时 DRAW：双方 HP 相等（裁决自洽）
+    ok(r2v.m.player.combat.hp === r2v.m.p2.combat.hp, '超时 DRAW：双方 HP 相等');
+  }
+
+  // —— (c) 超时裁决：双静止 AI → HP 相等 → DRAW（seat=null） ——
+  const r3 = run(mkIdle('P1'), mkIdle('P2'), 1.0);
+  ok(r3.ended !== null && r3.ended.seat === null,
+     '超时 + HP 相等 → DRAW（seat=null，§6.2）');
+  ok(r3.ended.secs >= 1.0 - STEP, '超时收束时刻 = timeLimit（±1 帧）');
+
+  // —— (d) 超时 HP 多者胜 ——
+  const deps3 = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+  let ended3 = null;
+  const m3 = new Match(deps3, { mode: 'demo', p1Input: mkIdle('P1'), p2Input: mkIdle('P2'),
+                                timeLimit: 1.0, onEnd: (seat) => { ended3 = seat; } });
+  m3.p2.combat.hit();                   // 白盒：P2 先扣 1 血
+  let t3 = 0;
+  while (!m3.ended && t3 < 120) { m3.update(STEP); t3++; }
+  ok(ended3 === 'P1', '超时 HP 多者胜（P2 扣血 → P1 胜）');
+}
+
+/* ---------- T16 触屏纯逻辑（v3.0 ADR-010 + v4.0 键位改派：Joystick/Button/TouchSource，node 事件桩喂值） ---------- */
+console.log('[T16] 触屏：摇杆死区/全速/knobOffset / 按钮 click 语义 / 挥刀·重锤钮改派 / pointerId 隔离 / Input 聚合');
+{
+  // —— (a) VirtualJoystick ——
+  {
+    const j = new VirtualJoystick();
+    j.start(1, 100, 100);
+    j.move(1, 103, 101);                // 位移 ~3.2 < 死区 8
+    ok(j.axis.x === 0 && j.axis.y === 0, '死区 8 内输出零轴');
+    j.move(1, 160, 100);                // 正右 60px
+    ok(Math.abs(j.axis.x - 1) < 1e-9 && j.axis.y === 0, '死区外单位向量（全速无比例）');
+    j.move(1, 100 + 42, 100 + 42);      // 对角 60px 左右
+    ok(Math.abs(j.axis.x - Math.SQRT1_2) < 1e-9 && Math.abs(j.axis.y - Math.SQRT1_2) < 1e-9,
+       '对角归一化');
+    const off = j.knobOffset();
+    ok(Math.abs(Math.hypot(off.x, off.y) - (60 - 12)) < 1e-6, 'knobOffset 半径 = r−12 = 48px');
+    j.end(2);                           // 错误 id 不清
+    ok(j.pointerId === 1, 'pointerId 隔离：错误 id 忽略');
+    j.end(1);
+    ok(j.pointerId === null && j.axis.x === 0 && j.axis.y === 0, '抬起归零');
+  }
+
+  // —— (b) TouchButton ——
+  {
+    const b = new TouchButton(1150, 620, 44);
+    ok(b.contains(1150, 620) && !b.contains(1150, 620 + 45), 'contains 圆域判定');
+    b.down(7);
+    ok(b.pressed && b.consumeClick() === true, '按下即置 clickPending（不等 touchend）');
+    ok(b.consumeClick() === false, 'click 一次消费');
+    b.down(7);
+    b.move(7, 1150, 620 + 50);          // 50 > 44 但 ≤ 1.2×44=52.8 → 容差内不松
+    ok(b.pressed, '滑出 1.2 倍容差内不松开');
+    b.move(7, 1150, 620 + 60);          // 60 > 52.8 → 松开
+    ok(!b.pressed, '滑出 1.2 倍容差即松开');
+    b.down(7); b.up(8);
+    ok(b.pressed, 'up id 隔离：错误 id 不松');
+    b.up(7);
+    ok(!b.pressed, 'up 正确 id 松开');
+  }
+
+  // —— (c) TouchSource：pointerId 隔离分配 + v4.0 键位改派 ——
+  {
+    const ts = new TouchSource();
+    ts.pointerDown(10, 200, 300);       // 左半屏 → 摇杆
+    ok(ts.joystick.pointerId === 10, '左半屏手指 → 摇杆');
+    ts.pointerDown(11, 1150, 620);      // 挥刀钮区
+    ok(ts.btnAtk.pointerId === 11 && ts.btnAtk.pressed, '钮区手指 → 挥刀钮');
+    ts.pointerDown(12, 1000, 660);      // 重锤钮区
+    ok(ts.btnGuard.pointerId === 12 && ts.btnGuard.pressed, '钮区手指 → 重锤钮（v4.0 改派）');
+    ts.pointerMove(10, 260, 300);
+    ok(Math.abs(ts.moveAxis().x - 1) < 1e-9, '摇杆手指移动 → 轴输出');
+    ok(ts.consumeHammer() === true && ts.consumeHammer() === false, '重锤钮 → 点按一次消费');
+    ok(ts.consumeBlade() === true, '挥刀钮 → consumeBlade 点按');
+    // 摇杆占用中：左半屏第二指不接管
+    ts.pointerDown(20, 300, 300);
+    ok(ts.joystick.pointerId === 10 && ts.joystick.pointerId !== 20,
+       '摇杆占用中：新手指不接管');
+    ts.pointerUp(20);
+    ts.pointerUp(10); ts.pointerUp(11); ts.pointerUp(12);
+    ok(ts.joystick.pointerId === null && !ts.btnAtk.pressed && !ts.btnGuard.pressed,
+       '各指抬起全复位');
+  }
+
+  // —— (d) Input 聚合：键鼠优先、触屏回落 ——
+  {
+    const input = new Input(stub.canvas);
+    ok(typeof input.getMoveAxis() === 'object' && input.getMoveAxis().x === 0,
+       '聚合输入空态零轴');
+    stub.fireWin('keydown', { code: 'KeyD', preventDefault() {} });
+    ok(input.getMoveAxis().x === 1, '键鼠轴优先');
+    stub.fireWin('keyup', { code: 'KeyD' });
+    // 触屏回落：摇杆占轴
+    input.touch.joystick.start(5, 100, 100);
+    input.touch.joystick.move(5, 160, 100);
+    ok(input.getMoveAxis().x === 1, '键鼠松开 → 触屏摇杆轴回落');
+    // 触屏挥刀/重锤点击聚合
+    input.touch.btnAtk.down(5);
+    ok(input.consumeBlade() === true, '触屏挥刀钮经 Input.consumeBlade 聚合消费');
+    input.touch.btnGuard.down(5);
+    ok(input.consumeHammer() === true, '触屏重锤钮经 Input.consumeHammer 聚合消费');
+    // 右键重锤点按
+    stub.fireCanvas('mousedown', { button: 2 });
+    ok(input.consumeHammer() === true && input.consumeHammer() === false,
+       '右键点按 → 重锤一次消费');
+    input.touch.joystick.end(5);
+  }
+}
+
+/* ---------- T17 菜单 IA（v3.0：五项 DOM + 二级屏/AI 编辑屏删净 + 联机骨架置灰 + v4.0 键位标签） ---------- */
+console.log('[T17] 菜单 IA：五项 DOM / 旧屏删净 / PAIR 屏全流程 / 触屏与 OrbAI 要素 / 挥刀·重锤标签');
+{
+  const html = fs.readFileSync(HTML, 'utf8');
+  const acts = ['solo', 'online', 'self', 'boss_solo', 'quit'];
+  const menuOk = acts.every((a) => html.includes('data-act="' + a + '"'));
+  ok(menuOk, '主菜单五项 data-act 齐备（solo/online/self/boss_solo/quit）');
+  ok(!html.includes('data-act="boss"') && !html.includes('data-act="ai"') &&
+     !html.includes('id="scr-boss"') && !html.includes('id="scr-ai"'),
+     '二级 boss 屏与 AI 编辑屏 DOM 删净（AI 保留为控制台 API）');
+  ok(html.includes('id="scr-pair"') && html.includes('生成邀请码') &&
+     html.includes('确认应答码') && html.includes('你的应答码'),
+     'v3.1 PAIR 屏：创建/加入/应答码全流程 DOM');
+  ok(html.includes('data-ol="back"') === false && html.includes('id="pair-back"'),
+     'v3.1：v3.0 置灰骨架废除，PAIR 屏返回入口就绪');
+  ok(html.includes('id="touchui"') && html.includes('id="joy-base"') &&
+     html.includes('id="joy-knob"') && html.includes('id="tbtn-atk"') &&
+     html.includes('id="tbtn-guard"'), '触屏控件 DOM 齐备');
+  ok(html.includes('挥刀') && html.includes('重锤'), 'v4.0 触屏键位标签：挥刀 / 重锤');
+  ok(html.includes('id="portrait-mask"') && html.includes('请横屏游玩'),
+     '竖屏遮罩 DOM');
+  ok(/user-scalable=no/.test(html) && /viewport-fit=cover/.test(html) &&
+     /touch-action:\s*none/.test(html), '移动 viewport + touch-action 锁定');
+  ok(html.includes('window.OrbAI') && html.includes('startMatch') &&
+     html.includes('stopMatch'), 'window.OrbAI 控制台 API 挂载');
+}
 /* ---------- T7 replay 序列化往返（不变，回归锁） ---------- */
 console.log('[T7] serializeReplay/deserializeReplay 往返 + 量化误差 < 0.02px');
 {
@@ -591,535 +1220,6 @@ console.log('[T10] onBossSoloWin 20 胜删除 + 顺位前移 + 池空');
   ok(isModeAvailable('boss_solo', store) === false, '池空 → 按钮回灰');
   ok(onBossSoloWin(store, 1).poolEmpty === true, '空池胜利安全');
   ok(onBossSoloLose(store, 1).defeated === 0, '空池失败安全');
-}
-
-/* ---------- T11 灰显 + HUD 文案 + v2.2 血条常量 ---------- */
-console.log('[T11] isModeAvailable（v3.0 六项 IA）+ hudLines 逐字 + HPBAR 布局常量');
-{
-  const store = new LocalGhostStore();
-  ok(isModeAvailable('solo', store) && isModeAvailable('self', store) &&
-     isModeAvailable('quit', store), 'solo/self/quit 常亮');
-  ok(isModeAvailable('online', store), 'v3.0：联机常亮（进骨架屏，配对联机开发中）');
-  ok(!isModeAvailable('ai', store), 'AI 菜单项已随用户指令删除（isModeAvailable 返回 false）');
-  ok(!isModeAvailable('boss', store) && !isModeAvailable('boss_online', store) &&
-     !isModeAvailable('boss_final', store),
-     'v3.0：旧 boss 二级入口与联机三池 act 已失效（返回 false）');
-  ok(!isModeAvailable('boss_solo', store), 'boss_solo 空池灰显');
-  ok(JSON.stringify(hudLines('self', { defeatedPlayers: 5 })) ===
-     JSON.stringify(['已打败玩家数：5/20']), 'self HUD 逐字');
-  ok(JSON.stringify(hudLines('boss_solo', { challengedSuccess: 3, defeatedPlayers: 7 })) ===
-     JSON.stringify(['被挑战成功数：3/20', '已打败玩家数：7']), '单机boss HUD 逐字');
-  ok(hudLines('solo', null).length === 0, 'solo 无 DOM HUD 行');
-
-  // v2.2 血条布局常量（fx.md v2.2 §D）
-  const HB = CONFIG.HPBAR;
-  ok(HB.W === 24 && HB.H === 10 && HB.GAP === 6 && HB.Y === 24 &&
-     HB.CX_P === 340 && HB.CX_G === 940,
-     '血条常量：3 格 24×10 间隔 6，组中心 x=340/940，y=24');
-  const total = HB.W * 3 + HB.GAP * 2;
-  ok(HB.CX_P - total / 2 > 0 && HB.CX_P + total / 2 < 640 - 60 &&
-     HB.CX_G - total / 2 > 640 + 60 && HB.CX_G + total / 2 < CONFIG.VIEW.W,
-     '血条组与「第 N 关」(x=640) 及画布边缘不重叠');
-  ok(CONFIG.HP.MAX === 3 && CONFIG.CLASH.DURATION === 0.300 &&
-     CONFIG.CLASH.KNOCKBACK === 60 && CONFIG.CLASH.KNOCKBACK_DUR === 0.150,
-     'v2.2 数值：maxHP=3 / 弹开 300ms / 击退 60px/150ms');
-  // I-40 更正后 FX 参数（v1.0 闪避风格：残影 + 速度线）
-  ok(CONFIG.FX.AFTERIMAGE.N === 3 && CONFIG.FX.AFTERIMAGE.GAP === 0.025 &&
-     CONFIG.FX.AFTERIMAGE.LIFE === 0.25 &&
-     JSON.stringify(CONFIG.FX.AFTERIMAGE.ALPHAS) === JSON.stringify([0.5, 0.35, 0.2]),
-     '残影：3 段 / 25ms 间隔 / 250ms / alpha 0.5/0.35/0.2');
-  ok(Math.abs(CONFIG.FX.SPEEDLINES.LIFE - 2 / 60) < 1e-9, '速度线：2 帧寿命');
-  ok(CONFIG.FX.WINDUP === undefined && CONFIG.FX.BAND === undefined &&
-     CONFIG.FX.SPARK === undefined && CONFIG.FX.CRESCENT === undefined,
-     'v1.1 FX 参数组已从 CONFIG 删除');
-  ok(CONFIG.HIT.FLASH === 0.080 && CONFIG.HIT.SHAKE === 3 && CONFIG.HIT.LOW_PULSE === 0.600,
-     'v2.2 受击反馈：白闪 80ms / 微震 3px / 低血脉动 600ms');
-  ok(CONFIG.GUARD.MAX_HOLD === 3.0 && CONFIG.GUARD.BLOCK_COOLDOWN === 3.0,
-     'v2.3 防御常量：最长 3s / 格挡与满额冷却 3s');
-}
-
-/* ---------- T12 Match 集成：无限链 / 败局 / clash / abandon ---------- */
-console.log('[T12] Match 集成（solo 无限链 / self 败局 / 对撞弹开 / abandon）');
-{
-  const mkDeps = () => ({ input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } });
-
-  // —— (a) solo 无限链：木桩 HP=3 → AUTO_ADVANCE → 第 2 关镜像 → 第 3 关 = 上关胜利段 ——
-  {
-    const deps = mkDeps();
-    const seedCalls = [];
-    const m = new Match(deps, { mode: 'solo', opp: 'dummy',
-                                onLevelWin: (n, rep) => seedCalls.push({ n, rep }) });
-    ok(m.level === 'PLAY' && m.levelN === 1 && m.dummy !== null,
-       'solo 从第 1 关木桩起（固定站位）');
-    ok(m.player.x === CONFIG.SPAWN.PLAYER.x && m.dummy.x === CONFIG.SPAWN.DUMMY.x,
-       '固定站位：玩家 (230,360) / 木桩 (1050,360)');
-    stub.fireCanvas('mousemove', { clientX: 1130, clientY: 360 });   // 鼠标兜底方向 = +x
-    let ticks = 0;
-    while (m.level !== 'AUTO_ADVANCE' && ticks < 800) {     // 每帧点左键连冲：木桩 HP=3
-      stub.fireCanvas('mousedown', { button: 0 });
-      m.update(STEP); ticks++;
-    }
-    ok(m.level === 'AUTO_ADVANCE' && m.dummy.combat.hp === 0,
-       '第 1 关：命中 3 次击碎木桩（HP=3）→ AUTO_ADVANCE（' + ticks + ' 帧）');
-    ok(seedCalls.length === 1 && seedCalls[0].n === 1, 'Match 层每关上报 onLevelWin（第 1 关）');
-    ok(m.mirrorReplay && m.mirrorReplay.trajectory.length > 0 &&
-       m.mirrorReplay.events.some((e) => e.type === 'charge'),
-       '教学段录制闭合 → 第 2 关幽灵来源');
-    ticks = 0;
-    while (m.level === 'AUTO_ADVANCE' && ticks < 120) { m.update(STEP); ticks++; }
-    ok(m.level === 'PLAY' && m.levelN === 2 && m.ghost !== null,
-       '1.2s 横幅后自动进第 2 关（无需确认输入）');
-    ok(m.ghost.replay === m.mirrorReplay, '第 2 关幽灵 = 教学段录制（ServeProvider）');
-    ok(m.recorder.tickCount <= 5, '新尝试段从帧 0 起录（教学段不混入）');
-    // 白盒驱动：击杀第 2 关幽灵 → 胜利段闭合 → 第 3 关
-    const winRep = m.recorder.snapshot();               // 预期胜利段内容（快照先取）
-    m._onOpponentDead(m.ghost, 2);                      // 内部 snapshot → lastWinReplay
-    ok(m.level === 'AUTO_ADVANCE' && seedCalls.length === 2 && seedCalls[1].n === 2,
-       '第 2 关击杀 → 上报胜利段（播种通道）');
-    ticks = 0;
-    while (m.level === 'AUTO_ADVANCE' && ticks < 120) { m.update(STEP); ticks++; }
-    ok(m.levelN === 3 && m.ghost.replay === m.lastWinReplay,
-       '第 3 关幽灵 = lastWinReplay（ServeProvider 同引用）');
-    ok(serializeReplay(m.lastWinReplay) === serializeReplay(winRep),
-       '第 3 关幽灵 = 第 2 关胜利段内容（快照一致）');
-    // R 重试同源：玩家 HP 归 0 → DEATH → R
-    m._onOpponentDead(m.ghost, 3);                      // 推进到第 4 关准备
-    ticks = 0; while (m.level === 'AUTO_ADVANCE' && ticks < 120) { m.update(STEP); ticks++; }
-    const replay4 = m.ghost.replay;
-    m.player.combat.hit(); m.player.combat.hit(); m.player.combat.hit();   // 玩家 HP 归 0
-    m.slowTimer = 0; m.level = 'DEATH';
-    m.prevR = false;
-    stub.fireWin('keydown', { code: 'KeyR', preventDefault() {} });
-    m.update(STEP);
-    stub.fireWin('keyup', { code: 'KeyR' });
-    ok(m.level === 'PLAY' && m.levelN === 4 && m.ghost.replay === replay4,
-       'R 重试当前关：幽灵数据不变（同源）');
-    ok(m.player.combat.hp === 3 && m.ghost.combat.hp === 3, 'R 重试双方 HP 重置 3');
-    ok(m.recorder.tickCount <= 5, '重试 = 新录制段（失败段丢弃，仅胜利段作幽灵源）');
-    ok(seedCalls.length === 3 && seedCalls.every((c) => c.n >= 1 && c.n <= 3),
-       'Match 层每关击杀均上报 onLevelWin（播种过滤在 GameScreen/seedOnLevelWin）');
-  }
-
-  // —— (b) 播种收窄：seedOnLevelWin 仅第 2 关 + 空池条件 ——
-  {
-    const store = new LocalGhostStore();
-    const rep = { duration: 1, trajectory: new Float32Array(10), events: [] };
-    ok(seedOnLevelWin(store, 1, rep) === false && store.list('self').length === 0,
-       '第 1 关胜利不播种');
-    ok(seedOnLevelWin(store, 3, rep) === false && store.list('self').length === 0,
-       '第 3 关胜利不播种（无限链不污染资产池）');
-    ok(seedOnLevelWin(store, 2, rep) === true && store.list('self').length === 1,
-       '第 2 关胜利 + 空池 → 播种挑战自我第 1 关');
-    ok(seedOnLevelWin(store, 2, rep) === false && store.list('self').length === 1,
-       '已有存档 → 不重复播种');
-  }
-
-  // —— (c) self 败局：镜像幽灵冲向玩家，3 次命中 → HP 归 0 → finish(lose) ——
-  {
-    const deps = mkDeps();
-    let ended = null;
-    const n = 600;
-    const gx = 990;                                     // 镜像后幽灵位 = 1280−990 = 290（玩家 230 右侧 60px）
-    const traj = new Float32Array(n * 2);
-    for (let i = 0; i < n; i++) { traj[2 * i] = gx; traj[2 * i + 1] = 360; }
-    const events = [];
-    for (let k = 0; k < 5; k++) events.push({ t: 31 + k * 120, type: 'charge', dirAngle: 0 });
-    const m = new Match(deps, { mode: 'self', opp: 'ghost',
-                                replay: { duration: n * CONFIG.STEP, trajectory: traj, events },
-                                onEnd: (r, rep, s) => { ended = { r, rep, s }; } });
-    ok(m.level === 'PLAY' && m.levelN === 1 && m.ghost !== null, 'self 单关对局（无教学关）');
-    m.update(STEP);
-    ok(Math.abs(m.ghost.x - (CONFIG.VIEW.W - gx)) < 1e-6,
-       '镜像轨迹：录制 x=990 → 幽灵 x=290（逐帧 x\'=1280−x）');
-    let ticks = 0;
-    while (!m.ended && ticks < 600) { m.update(STEP); ticks++; }
-    ok(m.ended && ended && ended.r === 'lose', '被幽灵 3 次命中（HP 归 0）→ finish(lose)');
-    ok(m.player.combat.hp === 0, '玩家 HP=0 才进死亡流程');
-    ok(ended.rep && ended.rep.trajectory.length > 0, '败局产出 replay（分段录制）');
-    // 镜像方向联动：dirAngle=0（朝右）→ 幽灵 facing=π（朝玩家侧）
-    ok(Math.abs(m.ghost.facing - Math.PI) < 1e-6 || m.ghost.combat.phase === 'IDLE',
-       '幽灵冲撞方向镜像朝玩家侧（dirAngle 0 → π）');
-  }
-
-  // —— (d) 对撞弹开：同 tick 起手 → 双方 CLASH、HP 不减、无 DRAW ——
-  {
-    const deps = mkDeps();
-    let endCalls = 0;
-    const n = 600;
-    const traj = new Float32Array(n * 2);
-    for (let i = 0; i < n; i++) { traj[2 * i] = 248; traj[2 * i + 1] = 360; }   // 镜像后幽灵位 1032
-    const m = new Match(deps, { mode: 'self', opp: 'ghost',
-                                replay: { duration: n * CONFIG.STEP, trajectory: traj, events: [] },
-                                onEnd: () => { endCalls++; } });
-    m.update(STEP);                                     // 幽灵就位 (1032,360)，玩家 (230,360)
-    // 白盒摆位：玩家拉到幽灵左侧 32px，同 tick 互冲
-    m.player.x = 1000; m.player.y = 360;
-    const t0 = m.tick;
-    m.player.combat.startCharge({ x: 1, y: 0 }, t0);
-    m.ghost.combat.startCharge({ x: -1, y: 0 }, t0);
-    let ticks = 0;
-    while (!(m.player.combat.phase === 'CLASH' && m.ghost.combat.phase === 'CLASH') && ticks < 60) {
-      m.update(STEP); ticks++;
-    }
-    ok(m.player.combat.phase === 'CLASH' && m.ghost.combat.phase === 'CLASH',
-       '同 tick 对撞 → 双方进 CLASH 弹开（无 DRAW 触发）');
-    ok(m.player.combat.hp === 3 && m.ghost.combat.hp === 3, '对撞双方 HP 不减');
-    ok(m.level === 'PLAY' && endCalls === 0, '对撞不掉血、无 DRAW、无结算');
-    ok(len(m.ghost.x - m.player.x, m.ghost.y - m.player.y) >= 32 - 1e-6,
-       '弹开后位置分离无重叠');
-    ticks = 0;
-    while ((m.player.combat.phase === 'CLASH' || m.ghost.combat.phase === 'CLASH') && ticks < 40) {
-      m.update(STEP); ticks++;
-    }
-    ok(m.player.combat.phase === 'IDLE' && m.ghost.combat.phase === 'IDLE',
-       '300ms 弹开结束自然恢复行动');
-  }
-
-  // —— (e) abandon ——
-  {
-    const deps = mkDeps();
-    let endCalls = 0;
-    const m = new Match(deps, { mode: 'solo', opp: 'dummy', onEnd: () => { endCalls++; } });
-    m.abandon();
-    ok(m.ended === true && endCalls === 0, 'abandon：录制作废、不计任何数');
-  }
-}
-
-/* ---------- T13 攻击特效运行时断言（I-40 更正：v1.0 闪避风格残影 + 速度线） ---------- */
-console.log('[T13] FX 运行时：冲撞残影 3 段 / 起手速度线 / 对撞双环 / 无拉丝光带星芒月牙');
-{
-  const fx = new FXSystem();
-  fx.queue.push({ type: 'charge_speedlines', x: 100, y: 100, ang: 0 });
-  fx.queue.push({ type: 'charge_afterimages', x: 200, y: 100, ang: 0, r: 16, color: '#ffe9c4' });
-  fx.queue.push({ type: 'clash_ring', x: 300, y: 200 });
-  fx.queue.push({ type: 'clash_ring', x: 340, y: 200 });
-  fx.flush();
-  ok(fx.speedlines.length === CONFIG.FX.SPEEDLINES.N, '起手速度线 ' + CONFIG.FX.SPEEDLINES.N + ' 条入队');
-  ok(Math.abs(fx.speedlines[0].maxLife - 2 / 60) < 1e-9, '速度线寿命 2 帧');
-  ok(fx.afterimages.length === 3, '冲撞残影 3 段入队');
-  ok(Math.abs(fx.afterimages[0].maxLife - 0.25) < 1e-9, '残影寿命 250ms');
-  ok(fx.afterimages[0].alpha === 0.5 && fx.afterimages[1].alpha === 0.35 &&
-     fx.afterimages[2].alpha === 0.2, '残影透明度 0.5/0.35/0.2');
-  const step = CONFIG.CHARGE.DASH_SPEED * CONFIG.FX.AFTERIMAGE.GAP;   // 42px/段
-  ok(Math.abs(fx.afterimages[1].x - (200 + step)) < 1e-9 &&
-     Math.abs(fx.afterimages[2].x - (200 + step * 2)) < 1e-9 &&
-     fx.afterimages[1].y === 100,
-     '残影沿冲撞方向 42px/段排布（1680×0.025）');
-  ok(fx.rings.length === 2 && Math.abs(fx.rings[0].r1 - 40) < 1e-9 &&
-     Math.abs(fx.rings[0].maxLife - 0.200) < 1e-9, '对撞弹开双环 r0→40px 200ms');
-  // 残影整体渐隐 + 250ms 消退
-  fx.update(0.125);
-  ok(fx.afterimages.length === 3 && fx.afterimages[0].life < fx.afterimages[0].maxLife,
-     '残影随寿命渐隐（125ms 时仍在）');
-  fx.update(0.13);
-  ok(fx.afterimages.length === 0, '残影 250ms 后消退');
-  ok(fx.speedlines.length === 0, '速度线 2 帧即消退');
-  // 无 v1.1 通道（源码级断言在 T0，此处防运行时复活）
-  ok(fx.streaks === undefined, 'streaks 通道已从 FXSystem 删除');
-}
-
-/* ---------- T14 OrbAI 契约（v3.0 ADR-009：快照冻结 / 异常空输入 / click0 一次消费 / 内置 AI 策略） ---------- */
-console.log('[T14] OrbAI 契约：snapshotView 深冻结 / AIInput 同通路 / 异常降级 / 内置 AI 策略');
-{
-  /* 公共 helper：静止 AI（不移动不冲撞不举盾） */
-  const mkStubIdle = (seat) => new AIInput(
-    { name: 'idle', think() { return { move: { x: 0, y: 0 }, click0: false, guardHeld: false }; } }, seat);
-  // —— (a) snapshotView：视角切换 + 深冻结 ——
-  {
-    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
-    const m = new Match(deps, { mode: 'demo', p1Input: new AIInput(createBuiltinAI(), 'P1'),
-                                p2Input: new AIInput(createBuiltinAI(), 'P2') });
-    ok(m.player.x === CONFIG.SPAWN.PLAYER.x && m.p2.x === CONFIG.SPAWN.GHOST.x,
-       'demo 站位：P1 (230,360) vs P2 (1050,360)');
-    ok(m.player.combat.maxHP === 3 && m.p2.combat.maxHP === 3, 'demo 双方 HP=3');
-    const s1 = m.snapshotView('P1');
-    const s2 = m.snapshotView('P2');
-    ok(s1.self.x === m.player.x && s1.opp.x === m.p2.x &&
-       s2.self.x === m.p2.x && s2.opp.x === m.player.x,
-       'seat 视角切换：self/opp 互为镜像引用位');
-    ok(s1.self.hp === 3 && s1.opp.hp === 3 && s1.tick === m.tick,
-       '快照含 hp / tick');
-    ok(s1.self.guardCd === 0 && s1.opp.guardCd === 0, '无冷却时 guardCd=0');
-    ok(typeof s1.arena.CHARGE_DISTANCE === 'number' &&
-       Math.abs(s1.arena.CHARGE_DISTANCE - CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000) < 1e-9,
-       'arena.CHARGE_DISTANCE = 1680×0.100 = 168px');
-    ok(s1.arena.BALL_R === CONFIG.BALL.R && s1.arena.HIT_R === CONFIG.CHARGE.HIT_R &&
-       s1.arena.HIT_OFFSET === CONFIG.CHARGE.HIT_OFFSET &&
-       s1.arena.W === CONFIG.VIEW.W && s1.arena.H === CONFIG.VIEW.H,
-       'arena 常量齐备（BALL_R/HIT_R/HIT_OFFSET/W/H）');
-    let frozen = true;
-    try {
-      s1.self.x = 999; s1.opp.phase = 'HACK'; s1.arena.W = 0; s1.self.chargeDir.x = 9;
-    } catch (e) { /* 严格模式静默失败也算冻结成功 */ }
-    frozen = s1.self.x !== 999 && s1.opp.phase !== 'HACK' && s1.arena.W !== 0;
-    ok(frozen, '快照深冻结：AI 篡改快照不影响世界（Object.freeze）');
-  }
-
-  // —— (b) AIInput 同通路：think 决策经 Player 消费触发冲撞 ——
-  {
-    let asked = 0;
-    const impl = { name: 'stub', think() { asked++; return { move: { x: 1, y: 0 }, click0: true, guardHeld: false }; } };
-    const ai = new AIInput(impl, 'P1');
-    /* 独立接口测试（fakeMatch 提供 snapshotView，隔离于 Match 集成） */
-    const fakeMatch = { snapshotView: (seat) => ({ tick: 0,
-      self: { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } },
-      opp: { x: 100, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: -1, y: 0 } },
-      arena: { W: 1280, H: 720, BALL_R: 16, HIT_R: 20, HIT_OFFSET: 18, CHARGE_DISTANCE: 168 } }) };
-    ai.beginTick(fakeMatch);
-    ok(asked === 1, 'beginTick 每 tick 恰好 think 一次（快照在消费前生成）');
-    ok(ai.getMoveAxis().x === 1, 'AI 决策经 Input 同接口消费（move）');
-    ok(ai.consumeClick(0) === true && ai.consumeClick(0) === false, 'click0 帧内一次消费');
-    ok(ai.isDown('KeyR') === false, 'AI 无按键语义（isDown 恒 false）');
-    /* Match 集成：AI 输入驱动 Player 冲撞（p1Input 通路） */
-    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
-    const m = new Match(deps, { mode: 'demo', p1Input: new AIInput(impl, 'P1'),
-                                p2Input: mkStubIdle() });
-    m.update(STEP);                     // 顶部 beginTick → Player.update 消费 click0
-    ok(m.player.combat.phase === 'CHARGE_WINDUP', 'AI click0 经 Player 同通路触发冲撞');
-    ok(m.p2.combat.phase === 'IDLE', 'P2 静止 AI 不受影响');
-  }
-
-  // —— (c) 异常降级：think 抛错 → 空输入 + 不判负不崩局（ADR-009） ——
-  {
-    const bad = { name: 'bad', think() { throw new Error('boom'); } };
-    const ai = new AIInput(bad, 'P1');
-    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
-    let ended = null;
-    const m = new Match(deps, { mode: 'demo', p1Input: ai,
-                                p2Input: new AIInput(bad, 'P2'),
-                                onEnd: (s) => { ended = s; } });
-    let ticks = 0;
-    while (!m.ended && ticks < 120) { m.update(STEP); ticks++; }   // 跑 2s
-    ok(!m.ended && ticks === 120, '双 AI think 抛错 → 对局不崩不判负（持续空转）');
-    ok(m.player.combat.hp === 3 && m.p2.combat.hp === 3, '异常空输入不产生误伤');
-    ok(ai.getMoveAxis().x === 0 && ai.getMoveAxis().y === 0 && ai.guardHeld() === false,
-       '异常帧输入 = 全空');
-  }
-
-  // —— (d) 冷却期 guardHeld 忽略：Combat 层拒绝（AI 与人类同规则） ——
-  {
-    const p = new Player(100, 100);
-    const T14_GAME = { fx: { queue: [] } };   // guard_denied 负反馈通道桩
-    /* 可编程 AI：script 队列决定每帧决策（白盒驱动防御流；fakeMatch 供快照） */
-    const script = [];
-    const impl = { name: 'scripted', think() {
-      return script.length ? script.shift()
-                           : { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
-    } };
-    const ai = new AIInput(impl, 'P1');
-    const fakeMatch = { snapshotView: () => ({ tick: 0,
-      self: { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } },
-      opp: { x: 100, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: -1, y: 0 } },
-      arena: { W: 1280, H: 720, BALL_R: 16, HIT_R: 20, HIT_OFFSET: 18, CHARGE_DISTANCE: 168 } }) };
-    const G = () => ({ move: { x: 0, y: 0 }, click0: false, guardHeld: true });
-    const R = () => ({ move: { x: 0, y: 0 }, click0: false, guardHeld: false });
-    script.push(G());
-    ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME);
-    ok(p.combat.phase === 'GUARD', 'AI guardHeld=true → 举盾');
-    for (let i = 0; i < 5; i++) { script.push(G()); ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME); }
-    ok(p.combat.phase === 'GUARD' && p.combat.t > 0, '持续举盾 6 帧（t = 已防御时长）');
-    script.push(R());                    // 松开 → manual 冷却 = 已防御时长
-    ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME);
-    const cd = p.combat._coolDur;
-    ok(p.combat.phase === 'GUARD_RELEASE' && cd > STEP, 'manual 松开进入冷却通道（cd = 举盾时长）');
-    let rejected = true;
-    for (let i = 0; i < 3 && p.combat.phase === 'GUARD_RELEASE'; i++) {
-      script.push(G());                  // 冷却期内重新按住
-      ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME);
-      if (p.combat.phase === 'GUARD') { rejected = false; break; }
-    }
-    ok(rejected, '冷却期 guardHeld=true 被 Combat 拒绝（AI 与人类同规则）');
-  }
-
-  // —— (e) 内置 AI 策略 + compileAICode + AISlotStore ——
-  {
-    const builtin = createBuiltinAI();
-    ok(builtin.name === '内置示例' && typeof builtin.think === 'function', '内置 AI 工厂');
-    const mkSnap = (dist, oppPhase, tick) => ({
-      tick,
-      self: { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } },
-      opp: { x: dist, y: 0, phase: oppPhase, hp: 3, guardCd: 0, chargeDir: { x: -1, y: 0 } },
-      arena: { W: 1280, H: 720, BALL_R: 16, HIT_R: 32, HIT_OFFSET: 40, CHARGE_DISTANCE: 168 },
-    });
-    let d = builtin.think(mkSnap(300, 'IDLE', 10));
-    ok(d.move.x === 1 && d.click0 === false, '远距 300px：追踪不冲撞');
-    d = builtin.think(mkSnap(200, 'IDLE', 10));
-    ok(d.click0 === true, '近距 200px + 对手 IDLE → 冲撞');
-    d = builtin.think(mkSnap(200, 'GUARD', 10));
-    ok(d.click0 === false, '对手 GUARD → 不冲撞（防御态不列 vulnerable）');
-    d = builtin.think(mkSnap(200, 'CHARGE_WINDUP', 10));
-    // 30% 概率触发 30 tick 举盾；无论触发与否决策合法
-    ok(d.move.x === 1 && typeof d.guardHeld === 'boolean', '对手起手：决策合法（举盾概率 30%）');
-
-    const aiObj = compileAICode("{ name:'t', think(state){ return { move:{x:0,y:0}, click0:false, guardHeld:false }; } }");
-    ok(typeof aiObj.think === 'function' && aiObj.name === 't', '控制台代码串可编译为 AI 对象');
-    let threw = false;
-    try { compileAICode('({})'); } catch (e) { threw = true; }
-    ok(threw, '缺 think → 编译拒绝');
-    threw = false;
-    try { compileAICode('({think('); } catch (e) { threw = true; }
-    ok(threw, '语法错误 → 编译拒绝');
-  }
-}
-
-/* ---------- T15 无头对局（v3.0 §1.3：Node 双 AI 跑到 match_end，零 DOM） ---------- */
-console.log('[T15] 无头双 AI 对局：内置 AI 对局到 match_end + HP=3 击杀路径 + 超时裁决');
-{
-  const mkIdle = (seat) => new AIInput(
-    { name: 'idle', think() { return { move: { x: 0, y: 0 }, click0: false, guardHeld: false }; } }, seat);
-  // —— (a) 内置 AI vs 静止 AI：追踪+冲撞 → 3 次命中 → P1 胜（确定路径） ——
-  const run = (p1Spec, p2Spec, timeLimit) => {
-    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
-    let ended = null;
-    const m = new Match(deps, {
-      mode: 'demo',
-      p1Input: p1Spec, p2Input: p2Spec, timeLimit,
-      onEnd: (seat, replay, secs) => { ended = { seat, replay, secs }; },
-    });
-    let ticks = 0;
-    while (!m.ended && ticks < Math.ceil(timeLimit / STEP) + 60) { m.update(STEP); ticks++; }
-    return { m, ended, ticks };
-  };
-  const r = run(new AIInput(createBuiltinAI(), 'P1'), mkIdle('P2'), 20);
-  ok(r.ended !== null, '无头对局在时限内跑到 match_end（' + (r.ticks * STEP).toFixed(2) + 's）');
-  ok(r.ended.seat === 'P1', '内置 AI 追踪静止对手 → P1 胜（seat 通道）');
-  ok(r.ended.replay === null, 'demo 收束不产 replay（零 Recorder）');
-  ok(r.m.p2.combat.phase === 'DEAD' && r.m.p2.combat.hp === 0,
-     '败者 HP=0 且进 DEAD（HP=3 击杀路径）');
-  ok(r.m.player.combat.hp > 0 && r.m.player.combat.hp <= 3, '胜者 HP 未归零');
-  ok(!r.m.recorder.recording, 'demo 对局零录制（recorder 未 begin）');
-
-  // —— (b) 双内置 AI 互战：60s 时限内必收束（对称 AI 可能相持 → 超时 DRAW 兜底亦为 match_end） ——
-  const r2v = run(new AIInput(createBuiltinAI(), 'P1'), new AIInput(createBuiltinAI(), 'P2'), 60);
-  ok(r2v.ended !== null && (r2v.ended.seat === 'P1' || r2v.ended.seat === 'P2' || r2v.ended.seat === null),
-     '双内置 AI 互战在 60s 内收束（' + (r2v.ticks * STEP).toFixed(1) + 's，seat=' + r2v.ended.seat + '）');
-  if (r2v.ended.seat === null) {        // 超时 DRAW：双方 HP 相等（裁决自洽）
-    ok(r2v.m.player.combat.hp === r2v.m.p2.combat.hp, '超时 DRAW：双方 HP 相等');
-  }
-
-  // —— (c) 超时裁决：双静止 AI → HP 相等 → DRAW（seat=null） ——
-  const r3 = run(mkIdle('P1'), mkIdle('P2'), 1.0);
-  ok(r3.ended !== null && r3.ended.seat === null,
-     '超时 + HP 相等 → DRAW（seat=null，§6.2）');
-  ok(r3.ended.secs >= 1.0 - STEP, '超时收束时刻 = timeLimit（±1 帧）');
-
-  // —— (d) 超时 HP 多者胜 ——
-  const deps3 = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
-  let ended3 = null;
-  const m3 = new Match(deps3, { mode: 'demo', p1Input: mkIdle('P1'), p2Input: mkIdle('P2'),
-                                timeLimit: 1.0, onEnd: (seat) => { ended3 = seat; } });
-  m3.p2.combat.hit();                   // 白盒：P2 先扣 1 血
-  let t3 = 0;
-  while (!m3.ended && t3 < 120) { m3.update(STEP); t3++; }
-  ok(ended3 === 'P1', '超时 HP 多者胜（P2 扣血 → P1 胜）');
-}
-
-/* ---------- T16 触屏纯逻辑（v3.0 ADR-010：Joystick/Button/TouchSource，node 事件桩喂值） ---------- */
-console.log('[T16] 触屏：摇杆死区/全速/knobOffset / 按钮 click0/滑出松开 / pointerId 隔离 / Input 聚合');
-{
-  // —— (a) VirtualJoystick ——
-  {
-    const j = new VirtualJoystick();
-    j.start(1, 100, 100);
-    j.move(1, 103, 101);                // 位移 ~3.2 < 死区 8
-    ok(j.axis.x === 0 && j.axis.y === 0, '死区 8 内输出零轴');
-    j.move(1, 160, 100);                // 正右 60px
-    ok(Math.abs(j.axis.x - 1) < 1e-9 && j.axis.y === 0, '死区外单位向量（全速无比例）');
-    j.move(1, 100 + 42, 100 + 42);      // 对角 60px 左右
-    ok(Math.abs(j.axis.x - Math.SQRT1_2) < 1e-9 && Math.abs(j.axis.y - Math.SQRT1_2) < 1e-9,
-       '对角归一化');
-    const off = j.knobOffset();
-    ok(Math.abs(Math.hypot(off.x, off.y) - (60 - 12)) < 1e-6, 'knobOffset 半径 = r−12 = 48px');
-    j.end(2);                           // 错误 id 不清
-    ok(j.pointerId === 1, 'pointerId 隔离：错误 id 忽略');
-    j.end(1);
-    ok(j.pointerId === null && j.axis.x === 0 && j.axis.y === 0, '抬起归零');
-  }
-
-  // —— (b) TouchButton ——
-  {
-    const b = new TouchButton(1150, 620, 44);
-    ok(b.contains(1150, 620) && !b.contains(1150, 620 + 45), 'contains 圆域判定');
-    b.down(7);
-    ok(b.pressed && b.consumeClick() === true, '按下即置 clickPending（不等 touchend）');
-    ok(b.consumeClick() === false, 'click0 一次消费');
-    b.down(7);
-    b.move(7, 1150, 620 + 50);          // 50 > 44 但 ≤ 1.2×44=52.8 → 容差内不松
-    ok(b.pressed, '滑出 1.2 倍容差内不松开');
-    b.move(7, 1150, 620 + 60);          // 60 > 52.8 → 松开
-    ok(!b.pressed, '滑出 1.2 倍容差即松开');
-    b.down(7); b.up(8);
-    ok(b.pressed, 'up id 隔离：错误 id 不松');
-    b.up(7);
-    ok(!b.pressed, 'up 正确 id 松开');
-  }
-
-  // —— (c) TouchSource：pointerId 隔离分配 ——
-  {
-    const ts = new TouchSource();
-    ts.pointerDown(10, 200, 300);       // 左半屏 → 摇杆
-    ok(ts.joystick.pointerId === 10, '左半屏手指 → 摇杆');
-    ts.pointerDown(11, 1150, 620);      // 攻击钮区
-    ok(ts.btnAtk.pointerId === 11 && ts.btnAtk.pressed, '钮区手指 → 攻击钮');
-    ts.pointerDown(12, 1000, 660);      // 防御钮区
-    ok(ts.btnGuard.pointerId === 12 && ts.btnGuard.pressed, '钮区手指 → 防御钮');
-    ts.pointerMove(10, 260, 300);
-    ok(Math.abs(ts.moveAxis().x - 1) < 1e-9, '摇杆手指移动 → 轴输出');
-    ok(ts.guardHeld() === true, '防御钮按住 → guardHeld');
-    ok(ts.consumeClick(0) === true, '攻击钮 → click0');
-    // 摇杆占用中：左半屏第二指不接管
-    ts.pointerDown(20, 300, 300);
-    ok(ts.joystick.pointerId === 10 && ts.joystick.pointerId !== 20,
-       '摇杆占用中：新手指不接管');
-    ts.pointerUp(20);
-    ts.pointerUp(10); ts.pointerUp(11); ts.pointerUp(12);
-    ok(ts.joystick.pointerId === null && !ts.btnAtk.pressed && !ts.btnGuard.pressed,
-       '各指抬起全复位');
-  }
-
-  // —— (d) Input 聚合：键鼠优先、触屏回落 ——
-  {
-    const input = new Input(stub.canvas);
-    ok(typeof input.getMoveAxis() === 'object' && input.getMoveAxis().x === 0,
-       '聚合输入空态零轴');
-    stub.fireWin('keydown', { code: 'KeyD', preventDefault() {} });
-    ok(input.getMoveAxis().x === 1, '键鼠轴优先');
-    stub.fireWin('keyup', { code: 'KeyD' });
-    // 触屏回落：摇杆占轴
-    input.touch.joystick.start(5, 100, 100);
-    input.touch.joystick.move(5, 160, 100);
-    ok(input.getMoveAxis().x === 1, '键鼠松开 → 触屏摇杆轴回落');
-    // 触屏攻击点击聚合
-    input.touch.btnAtk.down(5);
-    ok(input.consumeClick(0) === true, '触屏点击经 Input.consumeClick 聚合消费');
-    input.touch.joystick.end(5);
-  }
-}
-
-/* ---------- T17 菜单 IA（v3.0：五项 DOM + 二级屏/AI 编辑屏删净 + 联机骨架置灰） ---------- */
-console.log('[T17] 菜单 IA：五项 DOM / 旧屏删净 / PAIR 屏全流程 / 触屏与 OrbAI 要素');
-{
-  const html = fs.readFileSync(HTML, 'utf8');
-  const acts = ['solo', 'online', 'self', 'boss_solo', 'quit'];
-  const menuOk = acts.every((a) => html.includes('data-act="' + a + '"'));
-  ok(menuOk, '主菜单五项 data-act 齐备（solo/online/self/boss_solo/quit）');
-  ok(!html.includes('data-act="boss"') && !html.includes('data-act="ai"') &&
-     !html.includes('id="scr-boss"') && !html.includes('id="scr-ai"'),
-     '二级 boss 屏与 AI 编辑屏 DOM 删净（AI 保留为控制台 API）');
-  ok(html.includes('id="scr-pair"') && html.includes('生成邀请码') &&
-     html.includes('确认应答码') && html.includes('你的应答码'),
-     'v3.1 PAIR 屏：创建/加入/应答码全流程 DOM');
-  ok(html.includes('data-ol="back"') === false && html.includes('id="pair-back"'),
-     'v3.1：v3.0 置灰骨架废除，PAIR 屏返回入口就绪');
-  ok(html.includes('id="touchui"') && html.includes('id="joy-base"') &&
-     html.includes('id="joy-knob"') && html.includes('id="tbtn-atk"') &&
-     html.includes('id="tbtn-guard"'), '触屏控件 DOM 齐备');
-  ok(html.includes('id="portrait-mask"') && html.includes('请横屏游玩'),
-     '竖屏遮罩 DOM');
-  ok(/user-scalable=no/.test(html) && /viewport-fit=cover/.test(html) &&
-     /touch-action:\s*none/.test(html), '移动 viewport + touch-action 锁定');
-  ok(html.includes('window.OrbAI') && html.includes('startMatch') &&
-     html.includes('stopMatch'), 'window.OrbAI 控制台 API 挂载');
 }
 
 /* ---------- T18 packSDP/unpackSDP 往返 + 非法输入拒绝（架构 v3.1 §1.2） ---------- */
@@ -1285,16 +1385,26 @@ console.log('[T19] PairingHost 多 offer 并行 / PairingGuest 应答 / snap 与
   ok(secondGot && secondGot.ch === 2, '第二张连接独立通道（互不串扰）');
   ok(host.pending.size === 0, '两张邀请码全部消耗');
 
-  // —— (e) NetInputSource：seq 去重 + input 帧同接口 ——
+  // —— (e) NetInputSource v2：seq 去重 + blade/hammer/aim 同接口 ——
   const nis = new NetInputSource();
-  nis.feed({ t: 'input', seq: 3, move: { x: 1, y: 0 }, click0: true, guardHeld: true });
-  ok(nis.getMoveAxis().x === 1 && nis.guardHeld() === true, 'input 帧喂入 → Input 同接口读出');
-  nis.feed({ t: 'input', seq: 2, move: { x: -1, y: 0 }, click0: false, guardHeld: false });
+  nis.feed({ t: 'input', v: 2, seq: 3, move: { x: 1, y: 0 }, blade: true, hammer: false, aim: { x: 400, y: 300 } });
+  ok(nis.getMoveAxis().x === 1, 'input 帧喂入 → Input 同接口读出（move）');
+  ok(nis.consumeBlade() === true && nis.consumeBlade() === false, 'blade 帧内一次消费');
+  nis.feed({ t: 'input', v: 2, seq: 2, move: { x: -1, y: 0 }, blade: true, hammer: false, aim: null });
   ok(nis.getMoveAxis().x === 1, '乱序旧帧（seq 更小）丢弃');
-  ok(nis.consumeClick(0) === true && nis.consumeClick(0) === false, 'click0 一次消费');
-  nis.feed({ t: 'input', seq: 4, move: { x: 0, y: 1 }, click0: false, guardHeld: false });
+  nis.feed({ t: 'input', v: 2, seq: 4, move: { x: 0, y: 1 }, blade: false, hammer: true, aim: { x: 200, y: 500 } });
   ok(nis.getMoveAxis().y === 1 && nis.getMoveAxis().x === 0, '新 seq 帧覆盖状态');
-  ok(nis.isDown('KeyR') === false && nis.getChargeDir().x === 0, '远程端无按键/鼠标语义（Player 层兜底）');
+  ok(nis.consumeHammer() === true && nis.consumeHammer() === false, 'hammer 帧内一次消费');
+  const aimV = nis.getAim({ x: 100, y: 500 });
+  ok(Math.abs(aimV.x - 1) < 1e-9 && Math.abs(aimV.y) < 1e-9, 'getAim = 帧内虚拟光标 − 球心（单位向量，Input 同契约）');
+  nis.feed({ t: 'input', v: 1, seq: 5, move: { x: 9, y: 9 }, blade: true, hammer: true, aim: null });
+  ok(nis.getMoveAxis().x === 0 && nis.getMoveAxis().y === 1 &&
+     nis.consumeBlade() === false && nis.consumeHammer() === false,
+     '协议版本闸：v≠2 帧整体丢弃（INPUT_VERSION=2 不跨版本兼容）');
+  nis.feed({ t: 'input', v: 2, seq: 6, move: { x: 0, y: 0 }, blade: false, hammer: false, aim: null });
+  const aim0 = nis.getAim({ x: 100, y: 100 });
+  ok(aim0.x === 0 && aim0.y === 0, '无 aim 坐标 → 零向量（Player 层朝对手兜底）');
+  ok(nis.isDown('KeyR') === false, '远程端无按键语义（Player 层兜底）');
 }
 
 /* ---------- T20 双端对拍（核心验收）：Node 内存管道跑完整联机对局到 match_end ---------- */
@@ -1320,7 +1430,7 @@ console.log('[T20] 双端对拍：HostRoom 权威模拟 + GuestClient AI 席 →
   await gc.claimSeat('P2');                              // AI 席占座（ctrl 帧 → seat_ok）
   ok(room.seats.P2 === hostChan && gc.mySeat === 'P2', 'claim_seat → P2 入座（AI 与人类同包）');
   ok(room.p2Input instanceof NetInputSource, '远程席 = NetInputSource（人类/AI 同包不区分）');
-  gc.attachAI({ name: 'idle', think() { return { move: { x: 0, y: 0 }, click0: false, guardHeld: false }; } });
+  gc.attachAI({ name: 'idle', think() { return { move: { x: 0, y: 0 }, blade: false, hammer: false }; } });
   /* AI 席跑在访客端（本地 think → input 上行）；P2 取静止 AI 保证确定性击杀路径（同 T15(a)，
    * 双内置对称相持会拖到 300s 超时——相持语义已由 T15(b) 断言，此处不重复） */
 

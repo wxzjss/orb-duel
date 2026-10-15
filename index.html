@@ -128,8 +128,8 @@
 <div id="touchui">
   <div id="joy-base"></div>
   <div id="joy-knob"></div>
-  <div class="tbtn" id="tbtn-atk">冲撞</div>
-  <div class="tbtn" id="tbtn-guard">防御</div>
+  <div class="tbtn" id="tbtn-atk">挥刀</div>
+  <div class="tbtn" id="tbtn-guard">重锤</div>
 </div>
 <div id="portrait-mask">请横屏游玩</div>
 <div id="fade"></div>
@@ -143,17 +143,21 @@
 const CONFIG = {
   VIEW: { W: 1280, H: 720 },
   STEP: 1 / 60,                       // 固定逻辑步长（秒）
-  BALL: { R: 16, SPEED: 640 },        // v2.1：移速 640（翻倍）
-  CHARGE: { WINDUP: 0.050, ACTIVE: 0.100, RECOVERY: 0.050,
-            DASH_SPEED: 1680, HIT_R: 20, HIT_OFFSET: 18 },   // v2.1：1680×0.100=168px 位移不变；总周期 200ms
-  /* v2.3 防御重做：最长按住 3s；冷却三分支（松开=已防御时长 / 格挡成功=3s / 满额自动=3s） */
+  /* v4.0 基准：体型翻倍 32；攻击键位=左键挥刀/右键重锤（attack.md v4.0 §2）
+   * 刃区/锤区扇形锚点=球心、方向=准星；命中=目标本体圈与扇形相交（atan(32/d) 容差） */
+  BALL: { R: 32, SPEED: 640 },
+  BLADE:  { WINDUP: 0.080, ACTIVE: 0.070, RECOVERY: 0.120,
+            LUNGE_SPEED: 900, RADIUS: 128, HALF_ANGLE: Math.PI / 4, COOLDOWN: 0.270 },   // 突进 900×0.070≈63px；总冷却 270ms
+  HAMMER: { WINDUP: 0.350, ACTIVE: 0.150, RECOVERY: 0.400,
+            RADIUS: 96,  HALF_ANGLE: Math.PI / 6, COOLDOWN: 0.900 },                     // 无突进；总周期 900ms
+  /* 【dormant v4.0】防御系统整体废弃（guard.md DEPRECATED）：代码保留、运行时无触发源 */
   GUARD: { MAX_HOLD: 3.0, BLOCK_COOLDOWN: 3.0 },
-  BOUNCE: { DURATION: 0.400 },        // 格挡弹开（攻击者 400ms 强后摇，规则不变）
-  /* v2.2 对撞弹开：双方判定帧接触 → 各弹开 300ms（击退 60px/150ms + 硬直 150ms），不掉血 */
+  /* 刀刀弹开（v4.0 继承 v2.2 语言）：300ms = 击退 60px/150ms + 硬直 150ms，不掉血 */
   CLASH: { DURATION: 0.300, KNOCKBACK: 60, KNOCKBACK_DUR: 0.150,
            RING: { LIFE: 0.200, R1: 40 }, FLASH: 0.060 },
-  HP: { MAX: 3 },                     // v2.2：废除一击必杀
-  HIT: { FLASH: 0.080, SHAKE: 3, LOW_PULSE: 0.600 },   // v2.2 受击反馈：白闪 80ms / 微震 3px / 低血脉动 600ms
+  HP: { MAX: 3 },                     // v4.0：刀三击杀 / 锤秒杀（无视 HP）
+  HIT: { FLASH: 0.080, SHAKE: 3, LOW_PULSE: 0.600 },   // v2.2 受击反馈沿用
+  BOUNCE: { DURATION: 0.400 },        // 【dormant v4.0】格挡弹开 400ms 强后摇（随 guard 废弃，代码保留）
   /* v2.2 固定站位（全模式统一）：玩家恒左 / 幽灵恒右；「主客互换」作废 */
   SPAWN: {
     PLAYER:   { x: 230,  y: 360 },
@@ -161,31 +165,37 @@ const CONFIG = {
     GHOST:    { x: 1050, y: 360 },    // 幽灵出生点（v2.3 镜像回放后自然对齐）
     L1_PLAYER:{ x: 230,  y: 360 },    // 玩家恒定出生点
   },
-  BOUND: { INSET: 16 },               // 场地边界内缩
+  BOUND: { INSET: 32 },               // v4.0：边界内缩 = 体型 32
   FX: { POOL: 300, TRAIL_INTERVAL: 0.040,
         TRAIL:  { LIFE: 0.2, SIZE: 5, ALPHA: 0.25 },
-        /* I-40 更正（用户 09:4x 指令）：攻击特效 = v1.0 特效风格——
-         * 冲撞残影 3 段（间隔 25ms，alpha 0.5/0.35/0.2，寿命 250ms）+ 起手径向速度线 2 帧；
-         * v1.1 系列攻击特效均不采用（fx.md v2.1 节【作废声明】同步成立） */
-        AFTERIMAGE: { N: 3, GAP: 0.025, LIFE: 0.25,
-                      ALPHAS: [0.5, 0.35, 0.2] },          // 冲撞残影：沿冲撞方向 3 段
-        SPEEDLINES: { LIFE: 2 / 60, N: 10, LEN: 46 },      // 起手径向速度线（2 帧）
+        /* v4.0 挥刀特效（fx.md v4.0 §B）：宽月牙 128px 弧双层 + 刃缘火花 + 残影 2 段 + 震屏 4px */
+        BLADE_ARC:  { LIFE: 0.180, WIDTH: 24 },
+        BLADE_SPARK:{ N_MIN: 8, N_MAX: 12, SPEED_MIN: 300, SPEED_JITTER: 300, LIFE: 0.3,
+                      SIZE_MIN: 2, SIZE_JITTER: 2 },
+        BLADE_AFTER:{ N: 2, GAP: 0.025, LIFE: 0.2, ALPHAS: [0.4, 0.25] },   // 挥刀残影 2 段（25ms 间隔）
+        /* v4.0 重锤特效（fx.md v4.0 §C）：蓄力涨红+汇聚粒子 / 弧光 96px / 冲击环 / 震屏 8px */
+        HAMMER_ARC: { LIFE: 0.250, WIDTH: 32 },
+        HAMMER_RING:{ LIFE: 0.250, R1: 70 },
+        HAMMER_CHARGE: { N: 12, LIFE: 0.35 },
+        KILL:   { N_MIN: 24, N_JITTER: 6, SPEED_MIN: 200, SPEED_JITTER: 320,
+                  LIFE: 0.5, SIZE_MIN: 3, SIZE_JITTER: 3,
+                  RING: { LIFE: 0.25, R0: 0, R1: 90 }, RING2: { LIFE: 0.35, R0: 0, R1: 130 } },  // 秒杀爆裂 24 粒+双层环
         BURST:  { N_MIN: 14, N_JITTER: 5, SPEED_MIN: 200, SPEED_JITTER: 300,
                   LIFE: 0.5, SIZE_MIN: 3, SIZE_JITTER: 3,
-                  RING: { LIFE: 0.25, R0: 0, R1: 90 } },       // 死亡爆裂+冲击环（全保留）
-        BREAK:  { N: 24, SPEED: 260, LIFE: 0.35, SIZE_MIN: 2, SIZE_JITTER: 2 },  // 碎盾
-        STUN:   { LIFE: 0.30, R0: 10, R1: 40 },                // 格挡弹开眩晕环
-        DENY:   { LIFE: 0.05, SIZE_PAD: 4, COLOR: '#888' },    // 负反馈灰闪（冷却期按右键沿用）
+                  RING: { LIFE: 0.25, R0: 0, R1: 90 } },       // 普通死亡爆裂（14~18 粒）
+        /* v4.0 球体增亮（fx.md v4.0 §A）：暗背景 0.1s 锁定双球；双层外晕 'lighter' 混合 */
+        GLOW:   { PLAYER: { R: 70, A: 0.85 }, GHOST: { R: 70, A: 0.85 } },
   },
   /* v2.2 顶部血量 UI：3 格光条 24×10 间隔 6；组中心 x≈340/940，y=24；标签在血条下 8px */
   HPBAR: { W: 24, H: 10, GAP: 6, Y: 24, CX_P: 340, CX_G: 940, LABEL_DY: 18, RED_FLASH: 0.150 },
-  BANNER: { CLEAR_DUR: 1.2, DRAW_DUR: 0.6, ADVANCE_DUR: 1.2 },  // v2.1 AUTO_ADVANCE 横幅 1.2s
-  HITSTOP: 0.120,
-  GUARD_HITSTOP: 0.060,               // 碎盾 hitstop
+  BANNER: { CLEAR_DUR: 1.2, DRAW_DUR: 0.6, ADVANCE_DUR: 1.2 },  // v2.1 AUTO_ADVANCE 横幅 1.2s；DRAW 600ms（v4.0 锤锤复活）
+  HITSTOP: 0.120,                     // 普通死亡 / DRAW 复活 120ms
+  KILL_HITSTOP: 0.200,                // v4.0 锤秒杀 hitstop 200ms（区别普通死亡 120ms）
   DEATH_SLOW: { DUR: 1.0, SCALE: 0.3 },
-  SHAKE: { DEATH: 6, COLLIDE: 10, MISS: 2, HIT: 3, DECAY: 0.2 },   // v1.1：对撞 10px 重震恢复；受击微震 3px（v2.2）
+  SHAKE: { DEATH: 6, COLLIDE: 10, MISS: 2, HIT: 3, BLADE: 4, HAMMER: 8, DECAY: 0.2 },   // v4.0：出刀 4px / 落锤 8px
   PROTECT_TICKS: 30,                  // 500ms 首帧保护（60Hz × 0.5s）
-  COLOR: { PLAYER: '#ffe9c4', GHOST: '#7fd8e8' },
+  /* v4.0 球体增亮：玩家 #FFF8E7 纯亮暖白不透明 1.0 / 幽灵 #9FE8FF 冷青亮芯 0.95（fx.md v4.0 §A） */
+  COLOR: { PLAYER: '#FFF8E7', GHOST: '#9FE8FF' },
   /* v3.0 模式 → 存储映射（联机挑战/联机boss/终极boss 随 v3.0 联机改版删除，
    * RemoteGhostStore/ADR-007 作废；联机对战为 PVP 实时对战见 modes.md v3.0） */
   MODES: {
@@ -321,8 +331,9 @@ class TouchSource {
     this.visible = false;
   }
   moveAxis() { return this.joystick.axis; }
-  guardHeld() { return this.btnGuard.pressed; }
-  consumeClick(btn) { return btn === 0 ? this.btnAtk.consumeClick() : false; }
+  /* v4.0：防御钮改派重锤（点按语义）；方向=摇杆当前方向，无摇杆输入由 Player 层朝对手兜底 */
+  consumeBlade() { return this.btnAtk.consumeClick(); }
+  consumeHammer() { return this.btnGuard.consumeClick(); }
   /* pointerId 隔离分配：进入左半屏的手指→摇杆，其余按位置→按钮（mobile.md §3） */
   pointerDown(id, x, y) {
     if (x < CONFIG.VIEW.W / 2) { if (this.joystick.pointerId === null) this.joystick.start(id, x, y); return; }
@@ -344,11 +355,10 @@ class TouchSource {
 class Input {
   constructor(canvas) {
     this.held = new Set();
-    this.clicks = [];                   // 帧内待消费左键点击
-    this._guardHeld = false;            // 右键原始按住状态
-    this.mx = CONFIG.VIEW.W / 2;        // 鼠标逻辑坐标
+    this.clicks = [];                   // 帧内待消费左键点击（挥刀）
+    this._hammerClick = false;          // v4.0：右键点按=重锤（帧内一次消费）
+    this.mx = CONFIG.VIEW.W / 2;        // 鼠标逻辑坐标（准星来源）
     this.my = CONFIG.VIEW.H / 2;
-    this.lastMoveDir = null;            // 三级方向解析的记忆缓存
     this.touch = new TouchSource();     // v3.0 双源聚合（ADR-010）：键鼠 ⊕ 触屏，双源常开
 
     window.addEventListener('keydown', (e) => {
@@ -356,17 +366,14 @@ class Input {
       if (e.code.startsWith('Arrow')) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.held.delete(e.code));
-    window.addEventListener('blur', () => {           // 防幽灵键 + 不残留姿态
+    window.addEventListener('blur', () => {           // 防幽灵键
       this.held.clear();
-      this._guardHeld = false;
+      this._hammerClick = false;
     });
 
     canvas.addEventListener('mousedown', (e) => {
       if (e.button === 0) this.clicks.push(e.button);
-      if (e.button === 2) this._guardHeld = true;
-    });
-    window.addEventListener('mouseup', (e) => {
-      if (e.button === 2) this._guardHeld = false;    // v2.3：冷却归 Combat 层，无 Input 防抖
+      if (e.button === 2) this._hammerClick = true;
     });
     canvas.addEventListener('mousemove', (e) => {
       const rect = canvas.getBoundingClientRect();
@@ -376,7 +383,7 @@ class Input {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // 控制 #7
   }
   isDown(code) { return this.held.has(code); }
-  /* v3.0 聚合：键鼠轴非零优先，否则触屏摇杆轴（非零移动统一写入 lastMoveDir 记忆） */
+  /* v3.0 聚合：键鼠轴非零优先，否则触屏摇杆轴 */
   getMoveAxis() {
     let x = 0, y = 0;
     if (this.isDown('KeyW') || this.isDown('ArrowUp'))    y -= 1;
@@ -388,22 +395,26 @@ class Input {
     if (t.x !== 0 || t.y !== 0) return t;
     return { x: 0, y: 0 };
   }
-  guardHeld() { return this._guardHeld || this.touch.guardHeld(); }
-  /* 冲撞方向三级解析：移动输入 > 记忆方向 > 鼠标方向兜底
-   * （触屏态第三级在 Player 层退化为「朝对手兜底」，架构 v3.0 §3.1） */
-  getChargeDir(pos) {
-    const axis = this.getMoveAxis();
-    if (axis.x !== 0 || axis.y !== 0) {
-      this.lastMoveDir = axis;
-      return axis;
-    }
-    if (this.lastMoveDir) return this.lastMoveDir;
-    return norm(this.mx - pos.x, this.my - pos.y);   // 从未移动过 → 鼠标兜底
-  }
-  consumeClick(btn) {                   // 帧内消费一次左键点击（键鼠/触屏任一源）
-    const i = this.clicks.indexOf(btn);
+  consumeBlade() {                      // 帧内消费一次左键（键鼠/触屏任一源）
+    const i = this.clicks.indexOf(0);
     if (i >= 0) { this.clicks.splice(i, 1); return true; }
-    return this.touch.consumeClick(btn);   // v3.0 聚合
+    return this.touch.consumeBlade();   // v3.0 聚合
+  }
+  consumeHammer() {                     // v4.0：右键点按 / 触屏锤钮（点按）
+    const c = this._hammerClick;
+    this._hammerClick = false;
+    return c || this.touch.consumeHammer();
+  }
+  /* v4.0 攻击方向 = 准星方向（attack.md §6：鼠标坐标 − 球心，不绑定移动方向；
+   * 触屏：摇杆当前方向 > 朝对手兜底；返回零向量时 Player 层兜底朝对手） */
+  getAim(pos, game) {
+    if (this.touch.visible) {
+      const j = this.touch.joystick.axis;
+      if (j.x !== 0 || j.y !== 0) return norm(j.x, j.y);
+      const foe = game && (game.p2 || game.ghost || game.dummy);
+      return foe ? norm(foe.x - pos.x, foe.y - pos.y) : { x: 0, y: 0 };
+    }
+    return norm(this.mx - pos.x, this.my - pos.y);
   }
   endFrame() { this.clicks.length = 0; } // 未消费的点击不跨帧排队
 }
@@ -426,39 +437,24 @@ class Player extends Ball {
     this.combat = new Combat();
     this.combat.owner = this;
     this.trailTimer = 0;
-    this._prevGuardHeld = false;
   }
   update(dt, input, game) {
-    if (this.combat.phase === 'DEAD') return;
+    if (this.combat.phase === CombatState.DEAD) return;
     const c = this.combat;
 
-    // 冲撞意图（左键，帧内消费语义）
-    if (input.consumeClick(0) && c.phase === 'IDLE') {
-      let dir = input.getChargeDir(this);
-      if (dir.x === 0 && dir.y === 0) {
-        // v3.0：无方向输入（触屏静止/鼠标未动）→ 朝对手兜底（架构 §3.1 一行裁定）
-        const foe = game.p2 || game.ghost || game.dummy;
-        if (foe) dir = norm(foe.x - this.x, foe.y - this.y);
-      }
-      c.startCharge(dir, game.tick);
+    /* v4.0 攻击意图：方向=准星（getAim），零向量（触屏静止/鼠标未动）→ 朝对手兜底 */
+    if (input.consumeBlade() && c.phase === CombatState.IDLE && c.bladeCooldown <= 0) {
+      c.startBlade(this._aimDir(input, game), game.tick);
+    }
+    if (input.consumeHammer() && c.phase === CombatState.IDLE && c.hammerCooldown <= 0) {
+      c.startHammer(this._aimDir(input, game), game.tick);
     }
 
-    // 防御意图（右键长按）：仅 IDLE 可进；GUARD 中松开 → 冷却=已防御时长（v2.3）
-    if (c.phase === 'IDLE' && input.guardHeld()) {
-      c.startGuard();
-    }
-    if (c.phase === 'GUARD' && !input.guardHeld()) {
-      c.releaseGuard('manual');
-    }
-    // 冷却期（GUARD_RELEASE）新按下右键：50ms 暗淡负反馈（guard.md 沿用）
-    if (c.phase === 'GUARD_RELEASE' && input.guardHeld() && !this._prevGuardHeld) {
-      game.fx.queue.push({ type: 'guard_denied', x: this.x, y: this.y });
-    }
-    this._prevGuardHeld = input.guardHeld();
-
-    // 移动锁：起手+判定+GUARD+BOUNCE 锁定；RECOVERY/GUARD_RELEASE/IDLE 可移动
-    const locked = (c.phase === 'CHARGE_WINDUP' || c.phase === 'CHARGE_ACTIVE' ||
-                    c.phase === 'GUARD' || c.phase === 'BOUNCE');
+    /* 移动锁：刀起手+判定 / 锤起手+判定 / STAGGER 锁定；各后摇与 IDLE 可移动
+     * （attack.md v4.0：锤起手/判定移动锁定；刀突进期锁定） */
+    const locked = (c.phase === CombatState.BLADE_WINDUP || c.phase === CombatState.BLADE_ACTIVE ||
+                    c.phase === CombatState.HAMMER_WINDUP || c.phase === CombatState.HAMMER_ACTIVE ||
+                    c.phase === CombatState.STAGGER);
     if (!locked) {
       const axis = input.getMoveAxis();
       if (axis.x !== 0 || axis.y !== 0) {
@@ -474,6 +470,13 @@ class Player extends Ball {
     this.clampToBounds();
 
     c.update(dt);
+  }
+  /* v4.0 准星方向兜底链：输入源准星 → 朝对手（attack.md §6 触屏口径；架构 §3.1 延续） */
+  _aimDir(input, game) {
+    const dir = input.getAim(this, game);
+    if (dir.x !== 0 || dir.y !== 0) return dir;
+    const foe = game.p2 || game.ghost || game.dummy;
+    return foe ? norm(foe.x - this.x, foe.y - this.y) : { x: 1, y: 0 };
   }
   clampToBounds() {
     const i = CONFIG.BOUND.INSET;
@@ -505,7 +508,7 @@ class GhostPlayer extends Ball {
   }
   /* 入参 tick = Match.tick（与录制事件 t 同源，控制 #11）；循环回放 t mod T，镜像复刻 */
   update(tick, dt, game) {
-    if (this.combat.phase === 'DEAD') return;
+    if (this.combat.phase === CombatState.DEAD) return;
     const traj = this.replay.trajectory;
     const T = traj.length / 2;
     const tt = tick % T;
@@ -517,22 +520,22 @@ class GhostPlayer extends Ball {
     this.clampToBounds();
 
     // 事件回放：整数帧号比较（控制 #3）；非 IDLE 到达的事件安全丢弃（控制 #14）
+    // v4.0：charge→blade 映射（历史 replay 兼容）、hammer 执行、guard 事件静默跳过
     const events = this.replay.events;
     while (this.eventPtr < events.length && events[this.eventPtr].t <= tt) {
       const ev = events[this.eventPtr++];
       if (ev.t < CONFIG.PROTECT_TICKS) continue;  // 首帧保护：500ms 内动作不触发
-      if (ev.type === 'charge') {
-        if (this.combat.phase === 'IDLE') {
+      if (ev.type === 'charge' || ev.type === 'blade' || ev.type === 'hammer') {
+        if (this.combat.phase === CombatState.IDLE) {
           // v2.3 镜像换算（回放侧唯一换算点）：dirAngle' = π − dirAngle
-          // 玩家朝右撞(dirAngle=0) → 幽灵朝左撞(facing=π)
+          // 玩家朝右(dirAngle=0) → 幽灵朝左(facing=π)
           const ang = Math.PI - ev.dirAngle;
-          this.combat.startCharge({ x: Math.cos(ang), y: Math.sin(ang) }, tick);
+          const dir = { x: Math.cos(ang), y: Math.sin(ang) };
+          if (ev.type === 'hammer') this.combat.startHammer(dir, tick);   // 旧幽灵永不挥锤→历史无 hammer 事件
+          else this.combat.startBlade(dir, tick);
         }
-      } else if (ev.type === 'guard_begin') {
-        if (this.combat.phase === 'IDLE') this.combat.startGuard();     // guard 原样回放
-      } else if (ev.type === 'guard_end') {
-        if (this.combat.phase === 'GUARD') this.combat.releaseGuard('manual');  // 幽灵侧无冷却语义差异，幂等
       }
+      // guard_begin / guard_end（历史 replay）：静默跳过（guard.md DEPRECATED）
     }
 
     this.combat.update(dt);
@@ -545,46 +548,68 @@ class GhostPlayer extends Ball {
 }
 
 /* ============================================================
- * §5 Combat —— 战斗状态机 + 命中判定
+ * §5 Combat —— 战斗状态机 + 命中判定（v4.0 刀与锤）
+ * 相位枚举即联机快照 phase 字符串（ai-interface.md v4.0，小写）；
+ * GUARD/GUARD_RELEASE/BOUNCE/CLASH 为 dormant 项（guard.md DEPRECATED：代码保留无触发源）
  * ============================================================ */
-const CombatState = { IDLE: 'IDLE', CHARGE_WINDUP: 'CHARGE_WINDUP',
-  CHARGE_ACTIVE: 'CHARGE_ACTIVE', CHARGE_RECOVERY: 'CHARGE_RECOVERY',
-  GUARD: 'GUARD', GUARD_RELEASE: 'GUARD_RELEASE', BOUNCE: 'BOUNCE', CLASH: 'CLASH', DEAD: 'DEAD' };
+const CombatState = { IDLE: 'idle',
+  BLADE_WINDUP: 'blade_windup', BLADE_ACTIVE: 'blade_active', BLADE_RECOVERY: 'blade_recovery',
+  HAMMER_WINDUP: 'hammer_windup', HAMMER_ACTIVE: 'hammer_active', HAMMER_RECOVERY: 'hammer_recovery',
+  STAGGER: 'stagger', DEAD: 'dead',
+  /* dormant：防御姿态/冷却/格挡弹开/旧对撞弹开（v4.0 起无触发源） */
+  GUARD: 'GUARD', GUARD_RELEASE: 'GUARD_RELEASE', BOUNCE: 'BOUNCE', CLASH: 'CLASH' };
 
 class Combat {
   constructor() {
     this.phase = CombatState.IDLE;
     this.t = 0;                       // 阶段内计时
-    this.startTick = -1;              // 本次冲撞起手帧号（录制事件 t 同源；v2.2 起不参与裁决）
-    this.chargeDir = { x: 1, y: 0 };  // 冲撞方向单位向量（起手时锁定，v1.2 向量契约）
-    this.dashFrom = { x: 0, y: 0 };   // CHARGE_ACTIVE / CLASH 击退端点插值（控制 #4）
+    this.startTick = -1;              // 本次攻击起手帧号（录制事件 t 同源）
+    this.aimDir = { x: 1, y: 0 };     // 攻击方向单位向量（准星方向，出招即锁定）
+    this.dashFrom = { x: 0, y: 0 };   // BLADE_ACTIVE 突进 / STAGGER 击退端点插值（控制 #4）
     this.dashTo = { x: 0, y: 0 };
     this.onAction = null;             // (type, dirAngle) → Recorder（仅玩家）
-    /* v2.2：HP=3，归 0 才死；命中结算标记（每次冲撞对同一目标至多一次） */
+    /* HP=3：刀 −1 / 锤秒杀（无视 HP 直接 kill()）；命中结算标记（每次攻击对同一目标至多一次） */
     this.hp = CONFIG.HP.MAX;
     this.maxHP = CONFIG.HP.MAX;
     this._hitVictims = new Set();
-    /* v2.3：防御冷却三分支。GUARD 期间 t = 已防御时长；GUARD_RELEASE 期间 t = 冷却已流逝 */
-    this._guardDur = 0;               // 结束防御时锁定的已防御时长（manual 分支冷却取值）
-    this._coolDur = 0;                // 本次 GUARD_RELEASE 冷却总时长
-    this._expire = false;             // 满额 3s 标记：本帧保持 GUARD（格挡优先），下帧自动结束
+    /* v4.0 刀锤双冷却独立（从出招起算；共享攻击状态槽，互不取消） */
+    this.bladeCooldown = 0;
+    this.hammerCooldown = 0;
+    /* 【dormant v4.0】防御冷却三分支字段（无触发源，保留） */
+    this._guardDur = 0;
+    this._coolDur = 0;
+    this._expire = false;
   }
   _record(type, ang) { if (this.onAction) this.onAction(type, ang); }
 
-  /* IDLE + 方向有效 → CHARGE_WINDUP（v1.2 向量契约：角度只在入口换算一次） */
-  startCharge(dirVec, tick) {
-    if (this.phase !== CombatState.IDLE) return false;
-    this.phase = CombatState.CHARGE_WINDUP;
+  _beginAttack(state, spec, aimVec, tick) {
+    this.phase = state;
     this.t = 0;
     this.startTick = tick;
-    this.chargeDir = dirVec;          // 单位向量，起手即锁定不修正（attack.md 边界 1）
-    this.owner.facing = Math.atan2(dirVec.y, dirVec.x);   // 打击圈/渲染用角度
-    this._hitVictims.clear();         // 新冲撞新结算窗口（v2.2 矩阵 D：同一目标至多一次）
-    this._record('charge', this.owner.facing);            // 录制侧对外契约：dirAngle
+    this.aimDir = aimVec;             // 出招即锁定不修正（准星方向）
+    this.owner.facing = Math.atan2(aimVec.y, aimVec.x);
+    this._hitVictims.clear();         // 新攻击新结算窗口（同一目标至多一次）
+  }
+
+  /* 左键挥刀：三段 80/70/120ms + 突进 63px 朝准星；总冷却 270ms（出招起算） */
+  startBlade(aimVec, tick) {
+    if (this.phase !== CombatState.IDLE || this.bladeCooldown > 0) return false;
+    this._beginAttack(CombatState.BLADE_WINDUP, CONFIG.BLADE, aimVec, tick);
+    this.bladeCooldown = CONFIG.BLADE.COOLDOWN;
+    this._record('blade', this.owner.facing);
     return true;
   }
 
-  /* 仅 IDLE 可进（冷却期/各相位按右键无效）；v2.3 无 Input 防抖门槛 */
+  /* 右键重锤：三段 350/150/400ms 无突进；总冷却 900ms；全身无无敌 */
+  startHammer(aimVec, tick) {
+    if (this.phase !== CombatState.IDLE || this.hammerCooldown > 0) return false;
+    this._beginAttack(CombatState.HAMMER_WINDUP, CONFIG.HAMMER, aimVec, tick);
+    this.hammerCooldown = CONFIG.HAMMER.COOLDOWN;
+    this._record('hammer', this.owner.facing);
+    return true;
+  }
+
+  /* 【dormant v4.0】防御入口（无触发源）：仅 IDLE 可进 */
   startGuard() {
     if (this.phase !== CombatState.IDLE) return false;
     this.phase = CombatState.GUARD;
@@ -594,11 +619,10 @@ class Combat {
     return true;
   }
 
-  /* GUARD → GUARD_RELEASE（冷却计时通道）。v2.3 冷却三分支：
-   * manual：冷却 = 本次已防御时长（无下限）；block/timeout：冷却 3s。幂等 */
+  /* 【dormant v4.0】GUARD → GUARD_RELEASE 冷却计时通道。幂等 */
   releaseGuard(reason) {
     if (this.phase !== CombatState.GUARD) return false;
-    this._guardDur = this.t;                    // 满额帧格挡优先：t 在满额帧冻结于 MAX_HOLD
+    this._guardDur = this.t;
     this._coolDur = (reason === 'manual') ? this._guardDur : CONFIG.GUARD.BLOCK_COOLDOWN;
     this.phase = CombatState.GUARD_RELEASE;
     this.t = 0;
@@ -607,21 +631,17 @@ class Combat {
     return true;
   }
 
-  /* 格挡：攻击者弹开 400ms（dash 停在当前位置，无击退）——现行规则不变 */
+  /* 【dormant v4.0】格挡弹开 400ms（攻击者强后摇，无触发源） */
   bounce() {
-    console.assert(this.phase === 'CHARGE_ACTIVE', 'bounce only from CHARGE_ACTIVE');
+    console.assert(this.phase === 'blade_active', 'bounce only from blade_active');
     this.phase = CombatState.BOUNCE;
     this.t = 0;
   }
 
-  /* v2.2 对撞弹开：沿连线向外击退 60px/150ms + 硬直 150ms，不掉血 */
-  clash(dirVec) {
-    console.assert(this.phase === 'CHARGE_ACTIVE' || this.phase === 'CHARGE_WINDUP' || this.phase === 'IDLE',
-                   'clash from active/windup contact');
-    this.phase = CombatState.CLASH;
+  /* v4.0 刀刀弹开（继承 v2.2 对撞语言）：沿连线向外击退 60px/150ms + 硬直 150ms，不掉血 */
+  stagger(dirVec) {
+    this.phase = CombatState.STAGGER;
     this.t = 0;
-    this.chargeDir = dirVec;
-    this.owner.facing = Math.atan2(dirVec.y, dirVec.x);
     const i = CONFIG.BOUND.INSET;
     this.dashFrom = { x: this.owner.x, y: this.owner.y };
     this.dashTo = {
@@ -630,75 +650,99 @@ class Combat {
     };
   }
 
-  /* v2.2 命中：HP −1，归 0 才死。返回 'dead' | 'hit' */
+  /* 刀命中：HP −1，归 0 才死。返回 'dead' | 'hit' */
   hit() {
-    console.assert(this.phase !== 'DEAD', 'no hit on dead');
+    console.assert(this.phase !== 'dead', 'no hit on dead');
     this.hp -= 1;
     if (this.hp <= 0) { this.hp = 0; this.phase = CombatState.DEAD; this.t = 0; return 'dead'; }
     return 'hit';
   }
 
-  /* v2.0 兼容：直接击杀（DEAD 断言保留） */
+  /* 锤秒杀 / 直接击杀：无视 HP 直接进死亡流程 */
   kill() {
-    console.assert(this.phase !== 'DEAD', 'no double-kill');
+    console.assert(this.phase !== 'dead', 'no double-kill');
+    this.hp = 0;
     this.phase = CombatState.DEAD;
     this.t = 0;
   }
 
   update(dt) {
     if (this.phase === CombatState.DEAD) return;
+    /* 刀锤双冷却独立流逝（与相位无关；DEAD 不减） */
+    if (this.bladeCooldown > 0) this.bladeCooldown = Math.max(0, this.bladeCooldown - dt);
+    if (this.hammerCooldown > 0) this.hammerCooldown = Math.max(0, this.hammerCooldown - dt);
 
     switch (this.phase) {
-      case CombatState.CHARGE_WINDUP:
+      case CombatState.BLADE_WINDUP:
         this.t += dt;
-        if (this.t >= CONFIG.CHARGE.WINDUP) {
-          this.phase = CombatState.CHARGE_ACTIVE;
+        if (this.t >= CONFIG.BLADE.WINDUP) {
+          this.phase = CombatState.BLADE_ACTIVE;
           this.t = 0;
-          const dist = CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE;   // 168px
+          const dist = CONFIG.BLADE.LUNGE_SPEED * CONFIG.BLADE.ACTIVE;   // 900×0.070=63px
           const i = CONFIG.BOUND.INSET;
           this.dashFrom = { x: this.owner.x, y: this.owner.y };
-          // M1' 贴墙 clamp：端点按边界内缩约束，判定帧 lerp 自然被截断、不穿墙
+          // 突进端点按边界内缩约束（attack.md §7.1：扇形几何照算，位移 clamp）
           this.dashTo = {
-            x: clamp(this.owner.x + this.chargeDir.x * dist, i, CONFIG.VIEW.W - i),
-            y: clamp(this.owner.y + this.chargeDir.y * dist, i, CONFIG.VIEW.H - i),
+            x: clamp(this.owner.x + this.aimDir.x * dist, i, CONFIG.VIEW.W - i),
+            y: clamp(this.owner.y + this.aimDir.y * dist, i, CONFIG.VIEW.H - i),
           };
         }
         break;
-      case CombatState.CHARGE_ACTIVE: {
+      case CombatState.BLADE_ACTIVE: {
         this.t += dt;
-        const k = Math.min(1, this.t / CONFIG.CHARGE.ACTIVE);
+        const k = Math.min(1, this.t / CONFIG.BLADE.ACTIVE);
         this.owner.x = lerp(this.dashFrom.x, this.dashTo.x, k);
         this.owner.y = lerp(this.dashFrom.y, this.dashTo.y, k);
-        if (this.t >= CONFIG.CHARGE.ACTIVE) { this.phase = CombatState.CHARGE_RECOVERY; this.t = 0; }
+        if (this.t >= CONFIG.BLADE.ACTIVE) { this.phase = CombatState.BLADE_RECOVERY; this.t = 0; }
         break;
       }
-      case CombatState.CHARGE_RECOVERY:               // 后摇：可被打（矩阵「普通」行）
+      case CombatState.BLADE_RECOVERY:
         this.t += dt;
-        if (this.t >= CONFIG.CHARGE.RECOVERY) { this.phase = CombatState.IDLE; this.t = 0; }
+        if (this.t >= CONFIG.BLADE.RECOVERY) { this.phase = CombatState.IDLE; this.t = 0; }
         break;
+      case CombatState.HAMMER_WINDUP:                 // 起手+判定移动锁定（重承诺）
+        this.t += dt;
+        if (this.t >= CONFIG.HAMMER.WINDUP) { this.phase = CombatState.HAMMER_ACTIVE; this.t = 0; }
+        break;
+      case CombatState.HAMMER_ACTIVE:
+        this.t += dt;
+        if (this.t >= CONFIG.HAMMER.ACTIVE) { this.phase = CombatState.HAMMER_RECOVERY; this.t = 0; }
+        break;
+      case CombatState.HAMMER_RECOVERY:
+        this.t += dt;
+        if (this.t >= CONFIG.HAMMER.RECOVERY) { this.phase = CombatState.IDLE; this.t = 0; }
+        break;
+      case CombatState.STAGGER: {                     // 弹开 300ms：击退 60px/150ms + 硬直 150ms
+        this.t += dt;
+        {                                             // 击退段：端点插值（k 钳 1，硬直段钉在终点）
+          const k = Math.min(1, this.t / CONFIG.CLASH.KNOCKBACK_DUR);
+          this.owner.x = lerp(this.dashFrom.x, this.dashTo.x, k);
+          this.owner.y = lerp(this.dashFrom.y, this.dashTo.y, k);
+        }
+        if (this.t >= CONFIG.CLASH.DURATION) { this.phase = CombatState.IDLE; this.t = 0; }
+        break;
+      }
+      /* 【dormant v4.0】GUARD / GUARD_RELEASE / BOUNCE / CLASH 分支保留，无触发源 */
       case CombatState.GUARD:
-        this.t += dt;                                 // t = 已防御时长（v2.3 manual 冷却取值）
+        this.t += dt;
         if (this.t >= CONFIG.GUARD.MAX_HOLD) {
-          if (!this._expire) {
-            // 满额帧冻结时长不结束：保持 GUARD 让同帧命中先结算格挡（先到先结算，格挡优先）
-            this._expire = true;
-            this.t = CONFIG.GUARD.MAX_HOLD;
-          } else if (this.t >= CONFIG.GUARD.MAX_HOLD + CONFIG.STEP - 1e-9) {
-            this.releaseGuard('timeout');             // 满额帧未被命中 → 下一帧自动结束（冷却 3s）
+          if (!this._expire) { this._expire = true; this.t = CONFIG.GUARD.MAX_HOLD; }
+          else if (this.t >= CONFIG.GUARD.MAX_HOLD + CONFIG.STEP - 1e-9) {
+            this.releaseGuard('timeout');
           }
         }
         break;
-      case CombatState.GUARD_RELEASE:                 // v2.3 冷却计时通道：可移动可冲撞，不可再盾
+      case CombatState.GUARD_RELEASE:
         this.t += dt;
         if (this.t >= this._coolDur) { this.phase = CombatState.IDLE; this.t = 0; }
         break;
-      case CombatState.BOUNCE:                        // 400ms 强后摇，可被反击命中
+      case CombatState.BOUNCE:
         this.t += dt;
         if (this.t >= CONFIG.BOUNCE.DURATION) { this.phase = CombatState.IDLE; this.t = 0; }
         break;
-      case CombatState.CLASH: {                       // v2.2 对撞弹开 300ms
+      case CombatState.CLASH: {
         this.t += dt;
-        {                                             // 击退段：端点插值 60px/150ms（k 钳 1，硬直段钉在终点）
+        {
           const k = Math.min(1, this.t / CONFIG.CLASH.KNOCKBACK_DUR);
           this.owner.x = lerp(this.dashFrom.x, this.dashTo.x, k);
           this.owner.y = lerp(this.dashFrom.y, this.dashTo.y, k);
@@ -713,51 +757,68 @@ class Combat {
   canBeHit() { return this.phase !== CombatState.DEAD; }
 }
 
-/* 打击圈：r20 @ 球心前方 18px（判定帧内随球心每帧重算；v2.2 E：随实际球心=碰撞截停后位置） */
-function hitCircleOf(b) {
-  return {
-    x: b.x + Math.cos(b.facing) * CONFIG.CHARGE.HIT_OFFSET,
-    y: b.y + Math.sin(b.facing) * CONFIG.CHARGE.HIT_OFFSET,
-    r: CONFIG.CHARGE.HIT_R,
-  };
+/* ---------- v4.0 扇形攻击区几何（attack.md v4.0 §2） ----------
+ * 锚点=球心、方向=准星（facing）；命中 = 目标本体圈(r32)与扇形区相交，
+ * 角度按 atan(32/d) 容差补偿目标体型、距离按 radius + 32 补偿。 */
+function sectorOf(b) {
+  const spec = b.combat.phase === CombatState.HAMMER_ACTIVE ? CONFIG.HAMMER : CONFIG.BLADE;
+  return { x: b.x, y: b.y, dirAngle: b.facing, radius: spec.RADIUS, halfAngle: spec.HALF_ANGLE };
+}
+function sectorHits(sec, target) {
+  const dx = target.x - sec.x, dy = target.y - sec.y;
+  const d = len(dx, dy);
+  if (!Number.isFinite(d)) return false;            // NaN 防御（v1.2 契约延续）
+  if (d > sec.radius + target.r) return false;      // 距离含体型补偿
+  const tol = Math.atan(target.r / Math.max(d, 1e-6));
+  let da = Math.atan2(dy, dx) - sec.dirAngle;
+  da = Math.atan2(Math.sin(da), Math.cos(da));      // wrap 到 [-π, π]
+  return Math.abs(da) <= sec.halfAngle + tol;
 }
 
-/* Step1 收集用纯判定（v2.2 命中矩阵，只读，供 HitResolver 与单测共用）：
- * 'hit'（目标普通：IDLE/移动/后摇/弹开/冷却）| 'clash'（目标判定帧）|
- * 'inv_windup'（目标无敌起手）| 'guard'（目标防御）| null */
-function checkChargeHit(attacker, defender) {
-  if (attacker.combat.phase !== CombatState.CHARGE_ACTIVE) return null;
+/* Step1 收集用纯判定（v4.0 命中矩阵，只读，供 adjudicate 与单测共用）：
+ * 'blade'（刀判定帧接触）| 'hammer'（锤判定帧接触）| null
+ * 无敌态已不存在——起手/后摇全身可被打（v2.2 攻期无敌条款作废） */
+function checkAttackHit(attacker, defender) {
+  const ac = attacker.combat;
+  if (ac.phase !== CombatState.BLADE_ACTIVE && ac.phase !== CombatState.HAMMER_ACTIVE) return null;
   if (defender.combat.phase === CombatState.DEAD) return null;
-  if (attacker.combat._hitVictims.has(defender)) return null;   // 矩阵 D：同一冲撞对同一目标至多一次
-  const c = hitCircleOf(attacker);
-  const d = len(c.x - defender.x, c.y - defender.y);
-  if (!Number.isFinite(d)) return null;             // v1.2 NaN 防御：异常数据不产生假阳性
-  if (d >= c.r + defender.r) return null;
-  const dp = defender.combat.phase;
-  if (dp === CombatState.GUARD) return 'guard';
-  if (dp === CombatState.CHARGE_ACTIVE) return 'clash';
-  if (dp === CombatState.CHARGE_WINDUP) return 'inv_windup';
-  return 'hit';                                     // 普通（含 RECOVERY/BOUNCE/CLASH/GUARD_RELEASE）
+  if (ac._hitVictims.has(defender)) return null;   // 同一攻击对同一目标至多一次
+  const sec = sectorOf(attacker);
+  if (!sectorHits(sec, defender)) return null;
+  return ac.phase === CombatState.BLADE_ACTIVE ? 'blade' : 'hammer';
 }
 
-/* HitResolver 裁决核心（Step2，v2.2）：对称纯函数，控制 #15
- * 输入 events: [{attacker, defender, kind}]；产出由 Game.Step3 执行。
- * 双方判定帧接触（双 clash，含同 tick）→ 对撞弹开（废除 startTick 裁决与 DRAW 触发）。
- * 混合事件在 1v1 下不可能（同一实体状态唯一），filter 兜底取全部 clash。 */
+/* HitResolver 裁决核心（Step2，v4.0 §5.3 结算顺序，对称纯函数，控制 #15）：
+ * ① 刀刀刃区相交 → 弹开 300ms（优先于逐点命中）
+ * ② 锤锤互中 → 双方同时秒杀 → DRAW 复活
+ * ③ 剩余接触逐点套矩阵（{type:'list'}：刀+锤混合事件逐条结算；单条亦是 list[0]）
+ *    ——目标刀判定帧且攻击者在其刃区内 → 无效格挡；否则刀 −1 HP / 锤秒杀 */
 function adjudicate(events) {
   if (events.length === 0) return { type: 'none' };
-  const clashes = events.filter((e) => e.kind === 'clash');
-  if (clashes.length >= 2) return { type: 'clash', a: clashes[0].attacker, b: clashes[1].attacker };
-  if (clashes.length === 1) return { type: 'clash', a: clashes[0].attacker, b: clashes[0].defender };
-  const e = events[0];
-  if (e.kind === 'guard') return { type: 'guard', attacker: e.attacker, defender: e.defender };
-  if (e.kind === 'inv_windup') return { type: 'ineffective', attacker: e.attacker, defender: e.defender };
-  return { type: 'win', winner: e.attacker, loser: e.defender };
+  const blades = events.filter((e) => e.kind === 'blade');
+  const hammers = events.filter((e) => e.kind === 'hammer');
+  if (blades.length === 2 &&
+      sectorHits(sectorOf(blades[0].attacker), blades[1].attacker) &&
+      sectorHits(sectorOf(blades[1].attacker), blades[0].attacker)) {
+    return { type: 'stagger', a: blades[0].attacker, b: blades[1].attacker };
+  }
+  if (hammers.length === 2) return { type: 'draw_kill', a: hammers[0].attacker, b: hammers[1].attacker };
+  return { type: 'list', list: events.map(_resolveOne) };
+}
+/* ③ 单条接触的矩阵行判定（5.1 刀→目标 / 5.2 锤→目标） */
+function _resolveOne(e) {
+  /* 刃区无敌格挡：目标处于刀判定帧且攻击者（接触方）落在其刃区扇形内 */
+  if (e.defender.combat.phase === CombatState.BLADE_ACTIVE &&
+      sectorHits(sectorOf(e.defender), e.attacker)) {
+    return { type: 'ineffective', attacker: e.attacker, defender: e.defender };
+  }
+  if (e.kind === 'hammer') return { type: 'kill', winner: e.attacker, loser: e.defender };
+  return { type: 'hit', winner: e.attacker, loser: e.defender };
 }
 
 /* v2.2 E 实体碰撞：两球本体圈重叠 → 沿连线软推挤分离至恰好不重叠
  * 任何状态、无伤害、无特效、不触发任何状态；DEAD 不推（尸体静止）。
- * 冲撞路径被碰撞截停：每帧分离修正后判定圈随实际球心（hitCircleOf 帧内重算） */
+ * 攻击路径被碰撞截停：每帧分离修正后扇形区随实际球心（sectorOf 每次重算） */
 function resolveOverlap(a, b) {
   if (a.combat.phase === CombatState.DEAD || b.combat.phase === CombatState.DEAD) return;
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -854,10 +915,9 @@ class FXSystem {
     for (let i = CONFIG.FX.POOL - 1; i >= 0; i--) this.freeList.push(i);
     this.queue = [];                  // 逻辑期只入队，帧末 flush（控制 #2）
     this.lastEmitted = [];            // v3.1：flush 前的帧事件副本（联机快照 events 字段来源）
-    this.afterimages = [];            // I-40：冲撞残影（v1.0 特效风格语言：球体轮廓快照）
-    this.speedlines = [];             // I-40：起手径向速度线（2 帧消散）
-    this.rings = [];                  // 冲击环（r0→r1）：死亡爆裂 / 格挡眩晕 / 对撞弹开
-    this.halos = [];                  // guard_halo：常驻附着光圈（不走粒子池，fx.md §6.5）
+    this.afterimages = [];            // v4.0：挥刀残影 2 段（球体轮廓快照）
+    this.arcs = [];                   // v4.0：宽月牙刃光 / 锤击弧光（扇形弧段，双层）
+    this.rings = [];                  // 冲击环（r0→r1）：死亡爆裂 / 秒杀双层环 / 弹开双环
     this.shake = 0;                   // 屏幕震动幅度（仅渲染层偏移，不回写世界坐标）
     this.ambientAlive = 0;            // 氛围粒子存活计数（menu.md §6 上限 40）
   }
@@ -885,9 +945,9 @@ class FXSystem {
       case 'trail':
         this._spawn(ev.x, ev.y, 0, 0, FX.TRAIL.LIFE, FX.TRAIL.SIZE, CONFIG.COLOR.PLAYER, 'trail');
         break;
-      case 'charge_afterimages': {     // I-40：冲撞残影 3 段（沿冲撞方向 25ms 间隔，寿命 250ms）
-        const A = FX.AFTERIMAGE;
-        const step = CONFIG.CHARGE.DASH_SPEED * A.GAP;   // 42px/段（1680×0.025）
+      case 'blade_afterimages': {      // v4.0：挥刀残影 2 段（沿突进方向 25ms 间隔，寿命 200ms）
+        const A = FX.BLADE_AFTER;
+        const step = CONFIG.BLADE.LUNGE_SPEED * A.GAP;   // 22.5px/段（900×0.025）
         for (let k = 0; k < A.N; k++) {
           this.afterimages.push({
             x: ev.x + Math.cos(ev.ang) * step * k,
@@ -898,13 +958,44 @@ class FXSystem {
         }
         break;
       }
-      case 'charge_speedlines': {      // I-40：起手径向速度线（自球心向外放射，2 帧消散）
-        const S = FX.SPEEDLINES;
-        for (let k = 0; k < S.N; k++) {
-          const a = (k / S.N) * Math.PI * 2 + ev.ang;
-          this.speedlines.push({ x: ev.x, y: ev.y, ang: a,
-                                 life: S.LIFE, maxLife: S.LIFE, len: S.LEN });
+      case 'blade_swing': {            // v4.0 §B：宽月牙刃光 128px 弧宽 24 双层 + 刃缘火花 8~12 + 震屏 4px
+        const BA = FX.BLADE_ARC;
+        const life = ev.fade ? 0.040 : BA.LIFE;          // 无效命中（刃区格挡）：光弧提前消散 40ms
+        this.arcs.push({ x: ev.x, y: ev.y, ang: ev.ang, radius: CONFIG.BLADE.RADIUS,
+                         width: BA.WIDTH, life, maxLife: life, color: ev.color, glow: true });
+        if (!ev.fade) {
+          const SP = FX.BLADE_SPARK;
+          const n = SP.N_MIN + Math.floor(r() * (SP.N_MAX - SP.N_MIN + 1));
+          for (let k = 0; k < n; k++) {
+            const a = ev.ang + (r() - 0.5) * CONFIG.BLADE.HALF_ANGLE * 2;   // 沿弧缘飞溅
+            const sp = SP.SPEED_MIN + r() * SP.SPEED_JITTER;
+            const sx = ev.x + Math.cos(a) * CONFIG.BLADE.RADIUS * 0.8;
+            const sy = ev.y + Math.sin(a) * CONFIG.BLADE.RADIUS * 0.8;
+            this._spawn(sx, sy, Math.cos(a) * sp, Math.sin(a) * sp,
+                        SP.LIFE, SP.SIZE_MIN + r() * SP.SIZE_JITTER, ev.color, 'dot');
+          }
+          this.shake = Math.max(this.shake, CONFIG.SHAKE.BLADE);
         }
+        break;
+      }
+      case 'hammer_charge': {          // v4.0 §C：蓄力 12 枚汇聚粒子（起手一次性发射）
+        const HC = FX.HAMMER_CHARGE;
+        for (let k = 0; k < HC.N; k++) {
+          const a = r() * Math.PI * 2, d = 90 + r() * 40;
+          const p = this._spawn(ev.x, ev.y, 0, 0, HC.LIFE, 3, '#ff6b6b', 'dot');
+          if (p) { p._home = { x: ev.x, y: ev.y }; p._off = { x: Math.cos(a) * d, y: Math.sin(a) * d }; }
+        }
+        break;
+      }
+      case 'hammer_strike': {          // v4.0 §C：锤击弧光 96px 弧宽 32 寿命 250ms + 冲击环 r0→70 + 震屏 8px
+        const HA = FX.HAMMER_ARC;
+        this.arcs.push({ x: ev.x, y: ev.y, ang: ev.ang, radius: CONFIG.HAMMER.RADIUS,
+                         width: HA.WIDTH, life: HA.LIFE, maxLife: HA.LIFE, color: '#ffd9c4', glow: false });
+        this.rings.push({ x: ev.x + Math.cos(ev.ang) * CONFIG.HAMMER.RADIUS * 0.7,
+                          y: ev.y + Math.sin(ev.ang) * CONFIG.HAMMER.RADIUS * 0.7,
+                          life: FX.HAMMER_RING.LIFE, maxLife: FX.HAMMER_RING.LIFE,
+                          r0: 0, r1: FX.HAMMER_RING.R1 });
+        this.shake = Math.max(this.shake, CONFIG.SHAKE.HAMMER);
         break;
       }
       case 'clash_ring': {             // v2.2 对撞弹开：双向冲击环 r0→40px，200ms
@@ -913,43 +1004,28 @@ class FXSystem {
                           dir: ev.dir || 0 });
         break;
       }
-      case 'burst': {                  // 死亡爆裂 14~18 粒 + 冲击环（对撞双倍爆裂 dormant：v2.2 起无触发源）
-        const B = FX.BURST;
-        const n = ev.double ? 2 * (B.N_MIN + Math.floor(r() * B.N_JITTER))
-                            : B.N_MIN + Math.floor(r() * B.N_JITTER);
+      case 'burst': {                  // 死亡爆裂 14~18 粒 + 冲击环；ev.kill=true → 秒杀升级（fx.md v4.0 §C）；ev.small → 命中火花 8~10 粒零震屏
+        const K = ev.kill ? FX.KILL : FX.BURST;
+        const n = ev.small ? (8 + Math.floor(r() * 3)) : (K.N_MIN + Math.floor(r() * (K.N_JITTER + 1)));
         for (let k = 0; k < n; k++) {
-          const a = r() * Math.PI * 2, sp = B.SPEED_MIN + r() * B.SPEED_JITTER;
+          const a = r() * Math.PI * 2, sp = K.SPEED_MIN + r() * K.SPEED_JITTER;
           this._spawn(ev.x, ev.y, Math.cos(a) * sp, Math.sin(a) * sp,
-                      B.LIFE, B.SIZE_MIN + r() * B.SIZE_JITTER, ev.color, 'dot');
+                      K.LIFE, K.SIZE_MIN + r() * (K.SIZE_JITTER + 1), ev.color, 'dot');
         }
-        this.rings.push({ x: ev.x, y: ev.y, life: B.RING.LIFE, maxLife: B.RING.LIFE,
-                          r0: B.RING.R0, r1: B.RING.R1 });
-        this.shake = Math.max(this.shake, ev.shake || CONFIG.SHAKE.DEATH);
+        if (!ev.small) {
+          this.rings.push({ x: ev.x, y: ev.y, life: K.RING.LIFE, maxLife: K.RING.LIFE,
+                            r0: K.RING.R0, r1: K.RING.R1 });
+        }
+        if (ev.kill) {                 // 秒杀双层冲击环（r1=90 / r1=130）
+          const K2 = FX.KILL.RING2;
+          this.rings.push({ x: ev.x, y: ev.y, life: K2.LIFE, maxLife: K2.LIFE,
+                            r0: K2.R0, r1: K2.R1 });
+        }
+        if (!ev.small) this.shake = Math.max(this.shake, ev.shake || CONFIG.SHAKE.DEATH);
         break;
       }
-      case 'shield_break': {           // 护盾碎裂：碎片粒子（青）
-        for (let k = 0; k < FX.BREAK.N; k++) {
-          const a = r() * Math.PI * 2, sp = FX.BREAK.SPEED * (0.7 + r() * 0.6);
-          this._spawn(ev.x, ev.y, Math.cos(a) * sp, Math.sin(a) * sp,
-                      FX.BREAK.LIFE, FX.BREAK.SIZE_MIN + r() * FX.BREAK.SIZE_JITTER,
-                      CONFIG.COLOR.GHOST, 'dot');
-        }
-        break;
-      }
-      case 'bounce_stun':              // 弹开眩晕环 r0 → r1
-        this.rings.push({ x: ev.x, y: ev.y, life: FX.STUN.LIFE, maxLife: FX.STUN.LIFE,
-                          r0: FX.STUN.R0, r1: FX.STUN.R1 });
-        break;
-      case 'guard_halo':               // 常驻附着光圈：attach / detach
-        if (ev.action === 'attach') this.halos.push({ owner: ev.owner, t: 0, color: ev.color || CONFIG.COLOR.PLAYER });
-        else this.halos = this.halos.filter((h) => h.owner !== ev.owner);  // 0 帧残留
-        break;
       case 'miss':
         this.shake = Math.max(this.shake, CONFIG.SHAKE.MISS);
-        break;
-      case 'guard_denied':             // 防抖期负反馈：灰闪
-        this._spawn(ev.x, ev.y, 0, 0, FX.DENY.LIFE, CONFIG.BALL.R + FX.DENY.SIZE_PAD,
-                    FX.DENY.COLOR, 'ghost');
         break;
       case 'ambient': {                // v2.0 主菜单氛围：缓慢漂浮光球（≤40 枚，menu.md §6）
         if (this.ambientAlive >= 40) break;
@@ -986,20 +1062,24 @@ class FXSystem {
       p.life -= dt;
       if (p.life <= 0) { p.alive = false; if (p.kind === 'ambient') this.ambientAlive--; continue; }
       p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p._home) {                   // v4.0 锤蓄力汇聚粒子：随寿命向球心收敛（位置 = home + 偏移×剩余比）
+        const remain = Math.max(0, p.life / p.maxLife);
+        p.x = p._home.x + p._off.x * remain;
+        p.y = p._home.y + p._off.y * remain;
+      }
     }
     for (let i = this.afterimages.length - 1; i >= 0; i--) {
       this.afterimages[i].life -= dt;
       if (this.afterimages[i].life <= 0) this.afterimages.splice(i, 1);
     }
-    for (let i = this.speedlines.length - 1; i >= 0; i--) {
-      this.speedlines[i].life -= dt;
-      if (this.speedlines[i].life <= 0) this.speedlines.splice(i, 1);
+    for (let i = this.arcs.length - 1; i >= 0; i--) {
+      this.arcs[i].life -= dt;
+      if (this.arcs[i].life <= 0) this.arcs.splice(i, 1);
     }
     for (let i = this.rings.length - 1; i >= 0; i--) {
       this.rings[i].life -= dt;
       if (this.rings[i].life <= 0) this.rings.splice(i, 1);
     }
-    for (const h of this.halos) h.t += dt;           // 呼吸相位推进
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * (CONFIG.SHAKE.DEATH / CONFIG.SHAKE.DECAY));
   }
 
@@ -1015,7 +1095,7 @@ class FXSystem {
       ctx.arc(p.x, p.y, p.size * (p.kind === 'ghost' ? 1 : p.life / p.maxLife + 0.3), 0, Math.PI * 2);
       ctx.fill();
     }
-    // I-40 冲撞残影：球体轮廓快照，alpha 0.5/0.35/0.2 → 250ms 内整体渐隐
+    // v4.0 挥刀残影：球体轮廓快照，alpha 0.4/0.25 → 200ms 内整体渐隐
     for (const a of this.afterimages) {
       ctx.globalAlpha = a.alpha * (a.life / a.maxLife);
       ctx.fillStyle = a.color;
@@ -1023,18 +1103,22 @@ class FXSystem {
       ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
       ctx.fill();
     }
-    // I-40 起手速度线：自球心向外放射的短亮线，2 帧内渐隐
-    for (const l of this.speedlines) {
-      const k = l.life / l.maxLife;
-      ctx.globalAlpha = k * 0.8;
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(l.x + Math.cos(l.ang) * 18, l.y + Math.sin(l.ang) * 18);
-      ctx.lineTo(l.x + Math.cos(l.ang) * (18 + l.len), l.y + Math.sin(l.ang) * (18 + l.len));
-      ctx.stroke();
+    // v4.0 宽月牙刃光 / 锤击弧光：扇形弧段（双层=宽晕+亮芯）
+    for (const arc of this.arcs) {
+      const k = arc.life / arc.maxLife;
+      const a0 = arc.ang - Math.PI / 2.2, a1 = arc.ang + Math.PI / 2.2;   // ≈±82° 张弧
+      for (const [w, alpha, col] of arc.glow
+             ? [[arc.width * 2.2, 0.35 * k, arc.color], [arc.width, k, '#fff']]
+             : [[arc.width, k, arc.color]]) {
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = col;
+        ctx.lineWidth = w * (0.5 + 0.5 * k);
+        ctx.beginPath();
+        ctx.arc(arc.x, arc.y, arc.radius, a0, a1);
+        ctx.stroke();
+      }
     }
-    // 冲击环 r0→r1（死亡爆裂 / 格挡眩晕 / 对撞弹开共用通道）
+    // 冲击环 r0→r1（死亡爆裂 / 秒杀双层环 / 弹开双环 / 锤落点共用通道）
     for (const ring of this.rings) {
       const k = 1 - ring.life / ring.maxLife;
       ctx.globalAlpha = ring.life / ring.maxLife;
@@ -1042,16 +1126,6 @@ class FXSystem {
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.arc(ring.x, ring.y, lerp(ring.r0, ring.r1, k), 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    // guard_halo：呼吸光圈 r16→22（周期 800ms），透明度 0.5±0.15，附着读取实时位置
-    for (const h of this.halos) {
-      const rr = 19 + 3 * Math.sin(h.t * Math.PI * 2 / 0.8);
-      ctx.globalAlpha = 0.5 + 0.15 * Math.sin(h.t * Math.PI * 2 / 0.8);
-      ctx.strokeStyle = h.color;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(h.owner.x, h.owner.y, rr, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();                                   // 控制 #9：用完还原
@@ -1076,9 +1150,8 @@ class AudioBus {
   play(name) {
     if (!this.ctx) return;
     const spec = {
-      charge: { f0: 620, f1: 180, dur: 0.10, type: 'square',  gain: 0.05 },
-      guard:  { f0: 300, f1: 700, dur: 0.09, type: 'sine',    gain: 0.06 },
-      break:  { f0: 500, f1: 120, dur: 0.25, type: 'sawtooth',gain: 0.07 },  // 碎盾
+      blade:  { f0: 900, f1: 280, dur: 0.08, type: 'square',  gain: 0.05 },  // v4.0 挥刀
+      hammer: { f0: 150, f1: 60,  dur: 0.30, type: 'sawtooth',gain: 0.09 },  // v4.0 落锤
       death:  { f0: 200, f1: 40,  dur: 0.45, type: 'sawtooth',gain: 0.09 },
       banner: { f0: 90,  f1: 70,  dur: 0.60, type: 'sine',    gain: 0.10 },  // 低频音
       deny:   { f0: 140, f1: 120, dur: 0.08, type: 'square',  gain: 0.04 },
@@ -1306,68 +1379,78 @@ class LocalGhostStore {
 
 /* ============================================================
  * §9.5 OrbAI —— AI 输入管道（ADR-009：AI 输入与人类同通路）
- * ai-interface.md v3.0：AIInput implements Input 同接口；think() 决策
- * 消费冻结快照（Match.snapshotView），异常降级空输入不判负。
+ * ai-interface.md v4.0：Input 结构 blade/hammer（{x,y}=虚拟光标=准星来源）；
+ * think() 消费冻结快照（Match.snapshotView），异常降级空输入不判负。
  * ============================================================ */
 /* ---------- AIInput：每 tick 首先被 beginTick 喂入世界快照，决策缓存供本帧消费 ---------- */
 class AIInput {
   /* impl: {name, think(state)}；seat: 'P1'|'P2'（快照视角） */
   constructor(impl, seat) {
     this.impl = impl; this.seat = seat;
-    this._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
-    this._clickConsumed = false;
+    this._dec = { move: { x: 0, y: 0 }, blade: false, hammer: false };
+    this._bladeConsumed = false; this._hammerConsumed = false;
   }
   /* Match.update 顶部调用（逻辑更新前 = 上一帧末世界状态；本 tick 输入消费前就绪） */
   beginTick(match) {
-    this._clickConsumed = false;
+    this._bladeConsumed = false; this._hammerConsumed = false;
     try {
       const snap = match.snapshotView(this.seat);
       const d = this.impl.think(snap);
+      /* v4.0：blade/hammer = true | {x,y} | null（坐标即虚拟光标，与桌面鼠标同坐标管线）；
+       * 旧字段 click0/guardHeld/chargeHeld 不识别，传入被忽略（协议 v2 无跨版本兼容） */
       this._dec = {
         move: d && d.move ? { x: d.move.x || 0, y: d.move.y || 0 } : { x: 0, y: 0 },
-        click0: !!(d && d.click0),
-        guardHeld: !!(d && d.guardHeld),
+        blade: (d && d.blade) ? d.blade : false,
+        hammer: (d && d.hammer) ? d.hammer : false,
       };
     } catch (err) {
       /* ADR-009：AI 异常 = 空输入 + 控制台告警，不判负不崩局 */
       console.warn('[OrbAI] ' + (this.impl.name || 'ai') + ' think() 异常，本帧空输入：', err);
-      this._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+      this._dec = { move: { x: 0, y: 0 }, blade: false, hammer: false };
     }
   }
   getMoveAxis() { return this._dec.move; }
-  /* 冲撞方向 = move 决策向量（AI 的移动即意图）；零向量交给 Player 层「朝对手」兜底 */
-  getChargeDir() {
-    const m = this._dec.move;
-    if (m.x !== 0 || m.y !== 0) return norm(m.x, m.y);
+  /* 准星方向 = 决策中的虚拟光标坐标 − 球心（getAim 同人类鼠标管线）；无坐标 → 零向量交给 Player 兜底 */
+  getAim(pos) {
+    const c = this._dec.blade || this._dec.hammer;
+    if (c && c !== true && pos) return norm(c.x - pos.x, c.y - pos.y);
     return { x: 0, y: 0 };
   }
-  consumeClick(btn) {                   // click0 一次消费（同帧重复请求无效）
-    if (btn !== 0) return false;
-    if (this._clickConsumed) return false;
-    this._clickConsumed = true;
-    return this._dec.click0;
+  consumeBlade() {                      // 帧内一次消费（同帧重复请求无效）
+    if (this._bladeConsumed) return false;
+    this._bladeConsumed = true;
+    return !!this._dec.blade;
   }
-  guardHeld() { return this._dec.guardHeld; }
+  consumeHammer() {
+    if (this._hammerConsumed) return false;
+    this._hammerConsumed = true;
+    return !!this._dec.hammer;
+  }
   isDown() { return false; }            // AI 无按键语义（KeyR 等仅人类）
-  endFrame() {}                         // no-op（click0 生命周期由 beginTick 重置）
+  endFrame() {}                         // no-op（blade/hammer 生命周期由 beginTick 重置）
 }
 
-/* ---------- 内置示例 AI：追踪 + 距离<220 且对手非无敌时冲撞；对手起手 30% 概率举盾 500ms ---------- */
+/* ---------- 内置示例 AI v4.0：默认追击+刀连击；对手锤起手时切向绕后（harness 自定，策略不作硬性验收） ---------- */
 function createBuiltinAI() {
-  let guardUntil = 0;
+  let weaveSide = 1;
   return {
     name: '内置示例',
     think(state) {
       const dx = state.opp.x - state.self.x, dy = state.opp.y - state.self.y;
       const dist = Math.hypot(dx, dy);
-      const move = dist > 1 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
-      const oppVulnerable = state.opp.phase === 'IDLE' || state.opp.phase === 'CHARGE_ACTIVE';
-      const click0 = dist < 220 && oppVulnerable;
-      if (state.opp.phase === 'CHARGE_WINDUP' && Math.random() < 0.3) {
-        guardUntil = state.tick + 30;             // 500ms ≈ 30 tick
+      let move;
+      if (state.opp.phase === 'hammer_windup' || state.opp.phase === 'hammer_active') {
+        // 锤起手/判定 → 切向绕后（躲锤区 96px/±30° 扇形，重定向一次保持连贯）
+        const px = -dy / (dist || 1), py = dx / (dist || 1);
+        move = { x: px * weaveSide, y: py * weaveSide };
+      } else {
+        if (state.opp.phase === 'blade_windup' || state.opp.phase === 'hammer_windup') weaveSide = -weaveSide;
+        move = dist > 1 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
       }
-      const guardHeld = state.tick < guardUntil;
-      return { move, click0, guardHeld };
+      // 刀连击：距离 < 170（刃区 128 + 本体 64 内可及）且自身冷却完毕 → 虚拟光标=对手位置
+      const blade = (dist < 170 && state.self.bladeCooldown <= 0 && state.opp.phase !== 'dead')
+                    ? { x: state.opp.x, y: state.opp.y } : false;
+      return { move, blade, hammer: false };   // 内置 AI 不赌锤（高风险，策略保持稳健）
     },
   };
 }
@@ -1429,7 +1512,7 @@ class Match {
     this.matchTime = 0;                // 本关用时（秒）
     this._endTimer = 0;                // VICTORY 定格 → finish（self/boss 单关结算）
     this.prevR = false;
-    this._prevPhaseP = 'IDLE'; this._prevPhaseG = 'IDLE';
+    this._prevPhaseP = CombatState.IDLE; this._prevPhaseG = CombatState.IDLE;
     this._hpFlashP = 0; this._hpFlashG = 0;   // 血条熄灭格闪红 150ms
     this._hitFlashP = 0; this._hitFlashG = 0; // 受击白闪 80ms / 对撞白闪 60ms
     this.start();
@@ -1446,16 +1529,14 @@ class Match {
   enterDemo() {
     this.player = new Player(CONFIG.SPAWN.PLAYER.x, CONFIG.SPAWN.PLAYER.y);
     this.p2 = new Player(CONFIG.SPAWN.GHOST.x, CONFIG.SPAWN.GHOST.y);
-    this.player.combat.onAction = (type, ang) =>
-      this.audio.play(type === 'guard_begin' ? 'guard' : 'charge');
-    this.p2.combat.onAction = (type, ang) =>
-      this.audio.play(type === 'guard_begin' ? 'guard' : 'charge');
+    this.player.combat.onAction = (type, ang) => this.audio.play(type);   // v4.0：blade/hammer 音效名直映
+    this.p2.combat.onAction = (type, ang) => this.audio.play(type);
     this.dummy = null; this.ghost = null;
     this.recorder.reset();             // demo 不录制（recording 未 begin，sample/recordAction no-op）
     this.tick = 0; this.matchTime = 0;
     this.hitstopTimer = this.slowTimer = this._endTimer = 0;
     this._hpFlashP = this._hpFlashG = this._hitFlashP = this._hitFlashG = 0;
-    this._prevPhaseP = this._prevPhaseG = 'IDLE';
+    this._prevPhaseP = this._prevPhaseG = CombatState.IDLE;
     this.level = 'PLAY';
   }
   /* 动作录制+播音统一绑定（t = recorder.tickCount，段内单调、与轨迹帧严格对齐；
@@ -1464,7 +1545,7 @@ class Match {
     player.combat.onAction = (type, ang) => {
       // 控制 #11：事件 t 与轨迹帧同源——取 Recorder 自身帧计数（sample 前即当前待写帧号）
       this.recorder.recordAction(type, ang, this.recorder.tickCount);
-      this.audio.play(type === 'guard_begin' ? 'guard' : 'charge');
+      this.audio.play(type);           // v4.0：'blade' / 'hammer'（Recorder 事件类型 = 音效名）
     };
   }
   /* v2.1 无限关卡链 + v2.2 固定站位：进入第 n 关（1=教学木桩，≥2=镜像幽灵）。
@@ -1492,19 +1573,28 @@ class Match {
     this.matchTime = 0;
     this.hitstopTimer = this.slowTimer = this._endTimer = 0;
     this._hpFlashP = this._hpFlashG = this._hitFlashP = this._hitFlashG = 0;
-    this._prevPhaseP = this._prevPhaseG = 'IDLE';
+    this._prevPhaseP = this._prevPhaseG = CombatState.IDLE;
     this.level = 'PLAY';
   }
 
   /* ---------- 命中判定：HitResolver 三步原子裁决（控制 #10/#15）+ v2.2 命中矩阵 ---------- */
+  /* ---------- 命中判定：HitResolver 三步原子裁决（控制 #10/#15）+ v4.0 命中矩阵（attack.md §5） ---------- */
   resolveHits() {
-    if (this.opp === 'dummy' && this.levelN === 1) {   // 第 1 关木桩（HP=3，命中 3 次击碎）
-      const r = checkChargeHit(this.player, this.dummy);
-      if (r === 'hit') {
+    if (this.opp === 'dummy' && this.levelN === 1) {   // 第 1 关木桩（HP=3：三刀击杀 / 一锤秒杀）
+      const r = checkAttackHit(this.player, this.dummy);
+      if (r) {
         this.player.combat._hitVictims.add(this.dummy);
-        const res = this.dummy.combat.hit();           // −1 HP，归 0 才死
-        if (res === 'dead') this._onOpponentDead(this.dummy, this.levelN);   // → AUTO_ADVANCE
-        else this._onNonLethalHit(this.dummy, 'G');
+        if (r === 'hammer') {                        // 锤秒杀：无视 HP 直接击碎
+          this.dummy.combat.kill();
+          this._emitKillBurst(this.dummy, CONFIG.COLOR.GHOST);
+          this._onOpponentDead(this.dummy, this.levelN);   // → AUTO_ADVANCE
+        } else {
+          const res = this.dummy.combat.hit();       // 刀：−1 HP，归 0 才死
+          if (res === 'dead') {
+            this._emitKillBurst(this.dummy, CONFIG.COLOR.GHOST);   // HP 归 0 同秒杀视觉（爆裂）
+            this._onOpponentDead(this.dummy, this.levelN);
+          } else this._onNonLethalHit(this.dummy, 'G');
+        }
       }
       return;
     }
@@ -1515,59 +1605,87 @@ class Match {
 
     // Step1 收集（只读，对称顺序，不产生副作用）
     const events = [];
-    const r1 = checkChargeHit(p, g);
+    const r1 = checkAttackHit(p, g);
     if (r1) events.push({ attacker: p, defender: g, kind: r1 });
-    const r2 = checkChargeHit(g, p);
+    const r2 = checkAttackHit(g, p);
     if (r2) events.push({ attacker: g, defender: p, kind: r2 });
 
-    // Step2 裁决（本步内原子完成，禁止跨帧分判）
+    // Step2 裁决（本步内原子完成，禁止跨帧分判；§5.3 顺序①→②→③在 adjudicate 内实现）
     const verdict = adjudicate(events);
     if (verdict.type === 'none') return;
 
     // Step3 分配：先写相位，后推 fx（控制 #10：副作用不得先行）
-    if (verdict.type === 'clash') {                // v2.2 对撞弹开：双方不掉血，各 300ms
+    if (verdict.type === 'stagger') {              // ① 刀刀弹开：双方不掉血，各 300ms
       const a = verdict.a, b = verdict.b;
       const dx = b.x - a.x, dy = b.y - a.y;
       const L = len(dx, dy) || 1;
       const ux = dx / L, uy = dy / L;
-      a.combat.clash({ x: -ux, y: -uy });          // 沿连线互相弹开（弹开含碰撞分离）
-      b.combat.clash({ x: ux, y: uy });
+      a.combat.stagger({ x: -ux, y: -uy });        // 沿连线互相弹开（弹开含碰撞分离）
+      b.combat.stagger({ x: ux, y: uy });
       this.fx.queue.push({ type: 'clash_ring', x: a.x, y: a.y });
       this.fx.queue.push({ type: 'clash_ring', x: b.x, y: b.y });
       this._hitFlashP = Math.max(this._hitFlashP, CONFIG.CLASH.FLASH);   // 双方白闪 60ms
       this._hitFlashG = Math.max(this._hitFlashG, CONFIG.CLASH.FLASH);
-      this.fx.shake = Math.max(this.fx.shake, CONFIG.SHAKE.COLLIDE);     // v1.1 对撞重震 10px 恢复
-    } else if (verdict.type === 'win') {           // 有效命中：目标 −1 HP
-      const loser = verdict.loser, winner = verdict.winner;
-      winner.combat._hitVictims.add(loser);
-      const res = loser.combat.hit();
-      if (res === 'dead') {
-        if (this.mode === 'demo') {              // v3.0：demo 击杀 → 对局结束（无关卡链）
-          this.endDemo(loser === p ? 'P2' : 'P1', loser);
-        } else if (loser === p) {
-          this.fx.queue.push({ type: 'burst', x: p.x, y: p.y, color: CONFIG.COLOR.PLAYER });
-          this.audio.play('death');
-          this.hitstopTimer = CONFIG.HITSTOP;
-          this.slowTimer = CONFIG.DEATH_SLOW.DUR;  // 死亡慢放 1.0s @0.3
-          this.level = 'DEATH';
-        } else {
-          this.fx.queue.push({ type: 'burst', x: g.x, y: g.y, color: CONFIG.COLOR.GHOST });
-          this.audio.play('death');
-          this.hitstopTimer = CONFIG.HITSTOP;
-          this._onOpponentDead(g, this.levelN);    // solo → AUTO_ADVANCE；self/boss → VICTORY
+      this.fx.shake = Math.max(this.fx.shake, CONFIG.SHAKE.COLLIDE);
+    } else if (verdict.type === 'draw_kill') {     // ② 锤锤互中 → 双方同时秒杀 → DRAW 复活
+      verdict.a.combat.kill();
+      verdict.b.combat.kill();
+      this._emitKillBurst(verdict.a, CONFIG.COLOR.PLAYER);
+      this._emitKillBurst(verdict.b, CONFIG.COLOR.GHOST);
+      this.audio.play('death');
+      this.hitstopTimer = Math.max(this.hitstopTimer, CONFIG.HITSTOP);   // DRAW 复活 120ms hitstop
+      this.level = 'DRAW';                        // 120ms hitstop + 600ms「同归于尽」横幅 + 自动重开
+      this.bannerTimer = CONFIG.BANNER.DRAW_DUR;
+      this.recorder.reset();                      // DRAW = 无效对局：不产 replay、不计任何数（modes.md §3）
+    } else if (verdict.type === 'list') {          // ③ 逐点结算（刀+锤混合事件，按收集顺序）
+      for (const v of verdict.list) {
+        if (v.type === 'hit') {                    // 刀有效命中：目标 −1 HP
+          const loser = v.loser, winner = v.winner;
+          winner.combat._hitVictims.add(loser);
+          const res = loser.combat.hit();
+          if (res === 'dead') this._onEntityDead(loser, p, false);
+          else {
+            this._onNonLethalHit(loser, loser === p ? 'P' : 'G');
+            this.fx.queue.push({ type: 'burst', x: loser.x, y: loser.y,
+                                 color: loser === p ? CONFIG.COLOR.PLAYER : CONFIG.COLOR.GHOST,
+                                 shake: 0, kill: false, small: true });   // 命中火花（小爆裂、零震屏）
+          }
+        } else if (v.type === 'kill') {            // 锤秒杀：无视 HP 直接进死亡流程
+          v.loser.combat.kill();
+          v.winner.combat._hitVictims.add(v.loser);
+          this._onEntityDead(v.loser, p, true);
+        } else {                                   // ineffective：刃区格挡，光弧提前消散
+          v.attacker.combat._hitVictims.add(v.defender);
+          this.fx.queue.push({ type: 'blade_swing', x: v.attacker.x, y: v.attacker.y,
+                               ang: v.attacker.facing, color: '#fff', fade: true });
         }
-      } else {
-        this._onNonLethalHit(loser, loser === p ? 'P' : 'G');   // 受击反馈：白闪+微震+血条红闪
       }
-    } else if (verdict.type === 'guard') {         // 格挡成功：攻击者弹开 400ms，防御者碎盾（冷却 3s）
-      verdict.attacker.combat.bounce();
-      verdict.defender.combat.releaseGuard('block');
-      this.fx.queue.push({ type: 'shield_break', x: verdict.defender.x, y: verdict.defender.y });
-      this.audio.play('break');
-      this.hitstopTimer = Math.max(this.hitstopTimer, CONFIG.GUARD_HITSTOP);
-    } else if (verdict.type === 'ineffective') {   // 打在无敌起手上：不掉血不弹开（v1.1 无专属特效）
-      verdict.attacker.combat._hitVictims.add(verdict.defender);
     }
+  }
+
+  /* 实体死亡分派（demo 收束 / 玩家 DEATH / 对手 DEAD 通道）；hammer=true 时秒杀升级特效 */
+  _onEntityDead(loser, p, hammer) {
+    const isPlayer = loser === p;
+    if (this.mode === 'demo') {                  // v3.0：demo 击杀 → 对局结束（无关卡链）
+      this.endDemo(isPlayer ? 'P2' : 'P1', loser);
+      return;
+    }
+    this.fx.queue.push({ type: 'burst', x: loser.x, y: loser.y, kill: !!hammer,
+                         color: isPlayer ? CONFIG.COLOR.PLAYER : CONFIG.COLOR.GHOST });
+    this.audio.play('death');
+    this.hitstopTimer = Math.max(this.hitstopTimer, hammer ? CONFIG.KILL_HITSTOP : CONFIG.HITSTOP);
+    if (isPlayer) {
+      this.slowTimer = CONFIG.DEATH_SLOW.DUR;    // 死亡慢放 1.0s @0.3
+      this.level = 'DEATH';
+    } else {
+      this._onOpponentDead(loser, this.levelN);  // solo → AUTO_ADVANCE；self/boss → VICTORY
+    }
+  }
+
+  /* 秒杀/击杀爆裂升级：24 粒 + 双层冲击环 + 200ms hitstop（普通死亡 120ms 不变） */
+  _emitKillBurst(ent, color) {
+    this.fx.queue.push({ type: 'burst', x: ent.x, y: ent.y, kill: true, color });
+    this.hitstopTimer = Math.max(this.hitstopTimer, CONFIG.KILL_HITSTOP);
   }
 
   /* 对手 HP 归 0：solo 无限链 → AUTO_ADVANCE（仅第 2 关胜利段播种）；self/boss → VICTORY 结算 */
@@ -1595,27 +1713,22 @@ class Match {
            this._hpFlashG = Math.max(this._hpFlashG, CONFIG.HPBAR.RED_FLASH); }
   }
 
-  /* ---------- 特效钩子：相位迁移检测（逻辑期只入队） ---------- */
+  /* ---------- 特效钩子：相位迁移检测（逻辑期只入队；v4.0 刀锤特效） ---------- */
   fxHooks() {
     const trans = (ent, prev, color) => {
       const cur = ent.combat.phase;
-      if (prev !== 'CHARGE_WINDUP' && cur === 'CHARGE_WINDUP') {
-        this.fx.queue.push({ type: 'charge_speedlines', x: ent.x, y: ent.y, ang: ent.facing });   // I-40 起手速度线
+      if (prev !== CombatState.BLADE_ACTIVE && cur === CombatState.BLADE_ACTIVE) {
+        this.fx.queue.push({ type: 'blade_swing', x: ent.x, y: ent.y, ang: ent.facing, color });
+        this.fx.queue.push({ type: 'blade_afterimages', x: ent.x, y: ent.y, ang: ent.facing,
+                             r: ent.r, color });   // v4.0 挥刀残影 2 段（起手收缩 85% 描边在 drawBall）
       }
-      if (prev !== 'CHARGE_ACTIVE' && cur === 'CHARGE_ACTIVE') {
-        this.fx.queue.push({ type: 'charge_afterimages', x: ent.x, y: ent.y, ang: ent.facing,
-                             r: ent.r, color });   // I-40 冲撞残影 3 段（v1.0 特效风格）
+      if (prev !== CombatState.HAMMER_WINDUP && cur === CombatState.HAMMER_WINDUP) {
+        this.fx.queue.push({ type: 'hammer_charge', x: ent.x, y: ent.y });   // 蓄力汇聚粒子（涨红在 drawBall）
       }
-      if (prev !== 'BOUNCE' && cur === 'BOUNCE') {
-        this.fx.queue.push({ type: 'bounce_stun', x: ent.x, y: ent.y });
+      if (prev !== CombatState.HAMMER_ACTIVE && cur === CombatState.HAMMER_ACTIVE) {
+        this.fx.queue.push({ type: 'hammer_strike', x: ent.x, y: ent.y, ang: ent.facing });
       }
-      if (prev !== 'GUARD' && cur === 'GUARD') {
-        this.fx.queue.push({ type: 'guard_halo', owner: ent, action: 'attach', color });
-      }
-      if (prev === 'GUARD' && cur !== 'GUARD') {
-        this.fx.queue.push({ type: 'guard_halo', owner: ent, action: 'detach' });  // 0 帧残留
-      }
-      if (prev === 'CHARGE_ACTIVE' && cur === 'CHARGE_RECOVERY' &&
+      if (prev === CombatState.BLADE_ACTIVE && cur === CombatState.BLADE_RECOVERY &&
           ent.combat._hitVictims.size === 0) {
         this.fx.queue.push({ type: 'miss', x: ent.x, y: ent.y });   // v2.1 挥空轻震 2px（命中不震）
       }
@@ -1683,13 +1796,15 @@ class Match {
         if (this.bannerTimer <= 0) this.enterLevel(this.levelN + 1);
         break;
 
-      case 'DRAW':                     // dormant（v2.2 起同 tick 对撞已改弹开，无触发源；代码保留勿删）
-        console.assert(this.player.combat.phase === 'DEAD' && this.ghost && this.ghost.combat.phase === 'DEAD',
+      case 'DRAW':                     // v4.0 启用：锤锤互中双杀 → 120ms hitstop + 600ms「同归于尽」→ 自动重开
+        console.assert(this.player.combat.phase === CombatState.DEAD &&
+                       ((this.ghost && this.ghost.combat.phase === CombatState.DEAD) ||
+                        (this.p2 && this.p2.combat.phase === CombatState.DEAD)),
                        'DRAW requires both DEAD');
         this.bannerTimer -= dt;
         if (this.bannerTimer <= 0) {
-          this.recorder.reset();       // 无效对局：丢弃录制段（modes.md §3.2）
-          this.enterLevel(this.levelN);
+          if (this.mode === 'demo') { this.enterDemo(); }   // demo：重开新对局（横幅后自动复活）
+          else { this.recorder.reset(); this.enterLevel(this.levelN); }   // 单机：无效对局丢弃录制段
         }
         break;
 
@@ -1718,34 +1833,37 @@ class Match {
   }
 
   /* ---------- v3.0 ADR-009：AI 决策快照（seat = 'P1'|'P2'，self/opp 视角切换）----------
-   * 深冻结：AI 篡改快照不影响世界；guardCd = 冷却总长 − 已过时间（无盾时为 0） */
+   * v4.0 字段（ai-interface.md v4.0）：phase 小写枚举、bladeZone（仅 blade_active 非空）、
+   * bladeCooldown/hammerCooldown（剩余 ms）、radius=32；invincible/guard/chargeDir 移除。
+   * 深冻结：AI 篡改快照不影响世界 */
   snapshotView(seat) {
     const me = seat === 'P1' ? this.player : this.p2;
     const op = seat === 'P1' ? this.p2 : this.player;
     if (!me || !op || !me.combat || !op.combat) return null;
+    const ent = (b) => {
+      const c = b.combat;
+      const zone = c.phase === CombatState.BLADE_ACTIVE
+        ? { dirAngle: b.facing, radius: CONFIG.BLADE.RADIUS, halfAngle: CONFIG.BLADE.HALF_ANGLE }
+        : null;
+      return deepFreeze({
+        x: b.x, y: b.y,
+        phase: c.phase,
+        hp: c.hp,
+        radius: CONFIG.BALL.R,
+        bladeCooldown: Math.ceil(c.bladeCooldown * 1000),
+        hammerCooldown: Math.ceil(c.hammerCooldown * 1000),
+        bladeZone: zone ? deepFreeze(zone) : null,
+      });
+    };
     return deepFreeze({
       tick: this.tick,
-      self: deepFreeze({
-        x: me.x, y: me.y,
-        phase: me.combat.phase,
-        hp: me.combat.hp,
-        guardCd: me.combat.phase === 'GUARD_RELEASE'
-          ? Math.max(0, me.combat._coolDur - me.combat.t) : 0,
-        chargeDir: deepFreeze({ x: Math.cos(me.facing), y: Math.sin(me.facing) }),
-      }),
-      opp: deepFreeze({
-        x: op.x, y: op.y,
-        phase: op.combat.phase,
-        hp: op.combat.hp,
-        guardCd: op.combat.phase === 'GUARD_RELEASE'
-          ? Math.max(0, op.combat._coolDur - op.combat.t) : 0,
-        chargeDir: deepFreeze({ x: Math.cos(op.facing), y: Math.sin(op.facing) }),
-      }),
+      self: ent(me),
+      opp: ent(op),
       arena: deepFreeze({
         W: CONFIG.VIEW.W, H: CONFIG.VIEW.H,
-        BALL_R: CONFIG.BALL.R, HIT_R: CONFIG.CHARGE.HIT_R,
-        HIT_OFFSET: CONFIG.CHARGE.HIT_OFFSET,
-        CHARGE_DISTANCE: CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000,   // 168px
+        BALL_R: CONFIG.BALL.R, RADIUS: CONFIG.BALL.R,
+        BLADE_RADIUS: CONFIG.BLADE.RADIUS, BLADE_HALF_ANGLE: CONFIG.BLADE.HALF_ANGLE,
+        HAMMER_RADIUS: CONFIG.HAMMER.RADIUS, HAMMER_HALF_ANGLE: CONFIG.HAMMER.HALF_ANGLE,
       }),
     });
   }
@@ -1756,11 +1874,11 @@ class Match {
     if (this.ended) return;
     this.ended = true;
     if (loser) {   // 击杀收束：爆裂 + 死亡音 + hitstop 定格
-      this.fx.queue.push({ type: 'burst', x: loser.x, y: loser.y,
+      this.fx.queue.push({ type: 'burst', x: loser.x, y: loser.y, kill: true,
                            color: loser === this.player ? CONFIG.COLOR.PLAYER : CONFIG.COLOR.GHOST });
       this.audio.play('death');
-      this.hitstopTimer = CONFIG.HITSTOP;
-      if (loser.combat) loser.combat.phase = 'DEAD';
+      this.hitstopTimer = CONFIG.KILL_HITSTOP;
+      if (loser.combat) loser.combat.phase = CombatState.DEAD;
     }
     this.onEnd(seat, null, this.matchTime);
   }
@@ -1798,10 +1916,10 @@ class Match {
     this.fx.render(ctx);
 
     // 实体
-    if (this.dummy && this.dummy.combat.phase !== 'DEAD') this.drawBall(ctx, this.dummy, CONFIG.COLOR.GHOST, 0.9, false);
-    if (this.ghost && this.ghost.combat.phase !== 'DEAD') this.drawBall(ctx, this.ghost, CONFIG.COLOR.GHOST, 0.85, false);
-    if (this.p2 && this.p2.combat.phase !== 'DEAD') this.drawBall(ctx, this.p2, CONFIG.COLOR.GHOST, 1, false);   // v3.0 demo P2
-    if (this.player && this.player.combat && this.player.combat.phase !== 'DEAD')
+    if (this.dummy && this.dummy.combat.phase !== CombatState.DEAD) this.drawBall(ctx, this.dummy, CONFIG.COLOR.GHOST, 0.9, false);
+    if (this.ghost && this.ghost.combat.phase !== CombatState.DEAD) this.drawBall(ctx, this.ghost, CONFIG.COLOR.GHOST, 0.85, false);
+    if (this.p2 && this.p2.combat.phase !== CombatState.DEAD) this.drawBall(ctx, this.p2, CONFIG.COLOR.GHOST, 1, false);   // v3.0 demo P2
+    if (this.player && this.player.combat && this.player.combat.phase !== CombatState.DEAD)
       this.drawBall(ctx, this.player, CONFIG.COLOR.PLAYER, 1, true);
 
     // UI / 横幅
@@ -1813,30 +1931,48 @@ class Match {
     let r = b.r;
     let x = b.x, y = b.y;
     let flash = this._hitFlash(b) > 0;          // v2.2 受击/对撞白闪（80ms / 60ms）
+    const ph = b.combat ? b.combat.phase : CombatState.IDLE;
     ctx.save();
     ctx.globalAlpha = alpha;
-    // BOUNCE 眩晕：位置抖动 ±2px + 色闪（渲染层偏移，不回写逻辑坐标）
-    if (b.combat && b.combat.phase === 'BOUNCE') {
+    // 【dormant】BOUNCE 眩晕（v4.0 无触发源，代码保留）
+    if (b.combat && ph === CombatState.BOUNCE) {
       x += (Math.random() - 0.5) * 4;
       y += (Math.random() - 0.5) * 4;
-      flash = flash || Math.floor(b.combat.t / (CONFIG.BOUNCE.DURATION / 6)) % 2 === 0;  // 白↔本体色 3 次/400ms
+      flash = flash || Math.floor(b.combat.t / (CONFIG.BOUNCE.DURATION / 6)) % 2 === 0;
     }
-    // 起手收缩至 85% + 蓄力描边（I-31 验收通过的保留项）
-    if (b.combat && b.combat.phase === 'CHARGE_WINDUP') {
+    // v4.0 重锤蓄力：球体渐涨红（350ms 内 本体色 → #ff5a4d）
+    let bodyColor = flash ? '#fff' : color;
+    if (b.combat && ph === CombatState.HAMMER_WINDUP) {
+      const k = clamp(b.combat.t / CONFIG.HAMMER.WINDUP, 0, 1);
+      bodyColor = flash ? '#fff' : (k > 0.5 ? '#ff5a4d' : color);
+    }
+    // 起手收缩至 85% + 蓄力描边（刀/锤共用，I-31 保留项）
+    if (b.combat && (ph === CombatState.BLADE_WINDUP || ph === CombatState.HAMMER_WINDUP)) {
       r = b.r * 0.85;
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = ph === CombatState.HAMMER_WINDUP ? '#ff8a7a' : '#fff';
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, b.r + 4, 0, Math.PI * 2); ctx.stroke();
     }
+    /* v4.0 球体增亮（fx.md §A）：双层外晕 'lighter'（r≈70px α0.85）+ 亮芯主体 */
+    const glow = isPlayer ? CONFIG.FX.GLOW.PLAYER : CONFIG.FX.GLOW.GHOST;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = alpha * glow.A * 0.45;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x, y, glow.R, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = alpha * glow.A;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x, y, CONFIG.BALL.R * 1.35, 0, Math.PI * 2); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = alpha;
     ctx.shadowColor = color;
     ctx.shadowBlur = 18;
-    ctx.fillStyle = flash ? '#fff' : color;
+    ctx.fillStyle = bodyColor;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
     // v2.2 低血警示：HP=1 边缘持续微红脉动（周期 600ms）
-    if (b.combat && b.combat.maxHP && b.combat.hp === 1 && b.combat.phase !== 'DEAD') {
+    if (b.combat && b.combat.maxHP && b.combat.hp === 1 && b.combat.phase !== CombatState.DEAD) {
       const pulse = 0.35 + 0.3 * Math.sin(performance.now() / 1000 * Math.PI * 2 / CONFIG.HIT.LOW_PULSE);
       ctx.save();
       ctx.globalAlpha = clamp(pulse, 0, 1);
@@ -1864,13 +2000,13 @@ class Match {
         if (this.mode === 'solo' && this.levelN === 1) {
           ctx.font = '18px sans-serif';
           ctx.fillStyle = 'rgba(255,255,255,0.5)';
-          ctx.fillText('第 1 关：撞碎木桩 —— 你做的一切都会被记住', cx, 60);
+          ctx.fillText('第 1 关：斩碎木桩（三刀或一锤）—— 你做的一切都会被记住', cx, 60);
         }
         break;
       case 'AUTO_ADVANCE':             // v2.1：第 2 关附副标「它学会了你」
         this.banner(ctx, cx, this.levelN === 1 ? '第 2 关：它学会了你' : '第 ' + (this.levelN + 1) + ' 关');
         break;
-      case 'DRAW':                     // dormant（v2.2 起无触发源；代码保留勿删）
+      case 'DRAW':                     // v4.0：锤锤互中双杀复活横幅（600ms）
         this.banner(ctx, cx, '同归于尽');
         break;
       case 'DEATH':
@@ -1959,6 +2095,7 @@ const NET = {
   SPECTATOR_MAX: 8,
   COUNTDOWN: 3.0,
   AI_TAKEOVER: 30.0,                 // PLAYING 中断线座位 AI 托管时长（modes.md v3.1）
+  INPUT_VERSION: 2,                  // v4.0 input 帧版本（guardHeld→hammer / click0→blade，不跨版本兼容）
   ERR: { E_FORMAT: 'E_FORMAT', E_JSON: 'E_JSON', E_SHAPE: 'E_SHAPE',
          SEAT_TAKEN: 'SEAT_TAKEN', PEER_LOST: 'PEER_LOST', ROOM_FULL: 'ROOM_FULL' },
 };
@@ -2182,31 +2319,44 @@ class PairingGuest {
 }
 
 /* ---------- NetInputSource：远程 input 帧 → Input 同接口（房主端 P2 席） ----------
+ * v4.0 协议 v2：guardHeld → hammer、click0 → blade（帧带 v:2 版本号，不跨版本兼容）。
  * seq 去重（乱序容忍）：只消费 seq 更大的帧；每帧带全量状态，无 HOL 阻塞。 */
 class NetInputSource {
   constructor() {
     this._lastSeq = -1; this._move = { x: 0, y: 0 };
-    this._clickPending = false; this._clickConsumed = true; this._guard = false;
+    this._bladePending = false; this._bladeConsumed = true;
+    this._hammerPending = false; this._hammerConsumed = true;
+    this._aim = null;                 // blade/hammer 携带的虚拟光标（{x,y}）
   }
   /* onInput 回调挂 NetChannel.onSnap 的 input 帧分流 */
   feed(frame) {
     if (!frame || frame.t !== 'input') return;
+    if (frame.v !== undefined && frame.v !== NET.INPUT_VERSION) return;   // 协议版本闸
     if (frame.seq <= this._lastSeq) return;          // 旧/重帧丢弃
     this._lastSeq = frame.seq;
     this._move = frame.move || { x: 0, y: 0 };
-    if (frame.click0) { this._clickPending = true; this._clickConsumed = false; }
-    this._guard = !!frame.guardHeld;
+    this._aim = (frame.aim && typeof frame.aim.x === 'number') ? frame.aim
+              : (frame.blade && frame.blade !== true) ? frame.blade
+              : (frame.hammer && frame.hammer !== true) ? frame.hammer : null;
+    if (frame.blade) { this._bladePending = true; this._bladeConsumed = false; }
+    if (frame.hammer) { this._hammerPending = true; this._hammerConsumed = false; }
   }
   getMoveAxis() { return this._move; }
-  getChargeDir() { return { x: 0, y: 0 }; }          // 远程无鼠标语义；Player 层朝对手兜底
-  consumeClick(btn) {
-    if (btn !== 0) return false;
-    if (this._clickConsumed) return false;
-    this._clickConsumed = true; return this._clickPending;
+  /* 准星方向 = 帧内虚拟光标坐标 − 球心（Input 同契约：返回单位向量；无坐标 → Player 层朝对手兜底） */
+  getAim(pos) {
+    if (this._aim && pos) return norm(this._aim.x - pos.x, this._aim.y - pos.y);
+    return { x: 0, y: 0 };
   }
-  guardHeld() { return this._guard; }
+  consumeBlade() {
+    if (this._bladeConsumed) return false;
+    this._bladeConsumed = true; return this._bladePending;
+  }
+  consumeHammer() {
+    if (this._hammerConsumed) return false;
+    this._hammerConsumed = true; return this._hammerPending;
+  }
   isDown() { return false; }
-  endFrame() { this._clickPending = false; }
+  endFrame() { this._bladePending = false; this._hammerPending = false; }
 }
 
 /* ---------- HostRoom：权威端房间（WAITING→COUNTDOWN→PLAYING→ENDED，三局两胜） ---------- */
@@ -2324,14 +2474,14 @@ class HostRoom {
     const frame = {
       t: 'snapshot', tick: m.tick,
       p1: this._entSnap(m.player), p2: this._entSnap(m.p2),
-      events: (m.fx.lastEmitted || []).filter((e) => e.type !== 'guard_halo'),   // halo 附着型由访客按 phase 复现
+      events: (m.fx.lastEmitted || []),   // v4.0：事件全为可序列化平面对象（blade_swing/hammer_strike/burst…），附着型 halo 事件已随协议删除
     };
     for (const ch of this.channels) if (ch.open) ch.sendSnap(frame);
   }
   _entSnap(ent) {
-    if (!ent || !ent.combat) return { x: 0, y: 0, phase: 'DEAD', hp: 0, guard: 0 };
-    return { x: ent.x, y: ent.y, phase: ent.combat.phase, hp: ent.combat.hp,
-             guard: ent.combat.phase === 'GUARD' ? ent.combat.t : 0, facing: ent.facing };
+    if (!ent || !ent.combat) return { x: 0, y: 0, phase: CombatState.DEAD, hp: 0 };
+    /* v4.0：phase 即小写枚举字符串；guard 字段随协议废除 */
+    return { x: ent.x, y: ent.y, phase: ent.combat.phase, hp: ent.combat.hp, facing: ent.facing };
   }
   _broadcastState() {
     this._broadcastCtrl({ t: 'room_state',
@@ -2354,7 +2504,7 @@ class GuestClient {
     this.mySeat = null;
     this._seq = 0;
     this._ai = null;                        // AI 席：本地 think（ai-interface.md v3.1 §2）
-    this._inputMove = { x: 0, y: 0 }; this._inputClick = false; this._inputGuard = false;
+    this._inputMove = { x: 0, y: 0 }; this._inputBlade = false; this._inputHammer = false; this._inputAim = null;
   }
   attach(chan) {
     this.chan = chan;
@@ -2402,39 +2552,61 @@ class GuestClient {
   attachAI(impl) {
     this._ai = new AIInput(impl, this.mySeat === 'P2' ? 'P2' : 'P1');
   }
-  /* 人类输入采样（GuestScreen 每帧调）：本地 Input → 缓存 → sendInput */
+  /* 人类输入采样（NetGameScreen 每帧调）：本地 Input → 缓存 → sendInput（协议 v2） */
   sampleInput(input) {
     this._inputMove = input.getMoveAxis();
-    this._inputClick = input.consumeClick(0);
-    this._inputGuard = input.guardHeld();
+    this._inputBlade = input.consumeBlade();
+    this._inputHammer = input.consumeHammer();
+    /* 准星 = 虚拟光标（屏幕坐标）：本地 Input.getAim 单位向量 × 400 + 自家球心（与桌面鼠标同管线） */
+    const a = input.getAim ? input.getAim(this._aimPos(), null) : { x: 0, y: 0 };
+    const pos = this._aimPos();
+    this._inputAim = (a.x !== 0 || a.y !== 0) ? { x: pos.x + a.x * 400, y: pos.y + a.y * 400 } : null;
+  }
+  /* 准星参考点：快照中自己座位的球心（访客端无本地实体） */
+  _aimPos() {
+    const me = this.mySeat === 'P2' ? this.state.p2 : this.state.p1;
+    return me ? { x: me.x, y: me.y } : { x: CONFIG.VIEW.W / 2, y: CONFIG.VIEW.H / 2 };
   }
   sendInput() {
     if (!this.chan || !this.chan.open) return;
-    let move = this._inputMove, click0 = this._inputClick, guardHeld = this._inputGuard;
-    if (this._ai) {                        // AI 席：本地快照 think → 同包上行
-      this._ai._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+    let move = this._inputMove, blade = this._inputBlade, hammer = this._inputHammer;
+    let aim = this._inputAim;
+    if (this._ai) {                        // AI 席：本地快照 think → 同包上行（协议 v2 字段）
+      this._ai._dec = { move: { x: 0, y: 0 }, blade: false, hammer: false };
       const snap = this._guestSnapshotView();
       try {
         const d = this._ai.impl.think(snap);
         this._ai._dec = { move: d && d.move ? { x: d.move.x || 0, y: d.move.y || 0 } : { x: 0, y: 0 },
-                          click0: !!(d && d.click0), guardHeld: !!(d && d.guardHeld) };
+                          blade: (d && d.blade) ? d.blade : false,
+                          hammer: (d && d.hammer) ? d.hammer : false };
       } catch (err) { console.warn('[OrbAI] guest think 异常：', err); }
-      move = this._ai._dec.move; click0 = this._ai._dec.click0; guardHeld = this._ai._dec.guardHeld;
+      move = this._ai._dec.move;
+      blade = !!this._ai._dec.blade;
+      hammer = !!this._ai._dec.hammer;
+      const c = this._ai._dec.blade || this._ai._dec.hammer;   // AI 虚拟光标坐标
+      aim = (c && c !== true) ? { x: c.x, y: c.y } : null;
     }
-    this.chan.sendSnap({ t: 'input', seq: this._seq++,
-                         move, click0: !!click0, guardHeld: !!guardHeld });
+    this.chan.sendSnap({ t: 'input', v: NET.INPUT_VERSION, seq: this._seq++,
+                         move, blade: !!blade, hammer: !!hammer, aim: aim || null });
   }
-  /* 访客侧 think 快照：与 Match.snapshotView 同构（AI 无感差异） */
+  /* 访客侧 think 快照：与 Match.snapshotView v4.0 同构（AI 无感差异） */
   _guestSnapshotView() {
     const me = this.mySeat === 'P2' ? this.state.p2 : this.state.p1;
     const op = this.mySeat === 'P2' ? this.state.p1 : this.state.p2;
-    const norm = (e) => e ? { x: e.x, y: e.y, phase: e.phase, hp: e.hp, guardCd: 0,
-                              chargeDir: { x: Math.cos(e.facing || 0), y: Math.sin(e.facing || 0) } }
-                         : { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } };
+    const norm = (e) => {
+      if (!e) return { x: 0, y: 0, phase: CombatState.IDLE, hp: 3, radius: CONFIG.BALL.R,
+                       bladeCooldown: 0, hammerCooldown: 0, bladeZone: null };
+      const zone = e.phase === CombatState.BLADE_ACTIVE
+        ? { dirAngle: e.facing || 0, radius: CONFIG.BLADE.RADIUS, halfAngle: CONFIG.BLADE.HALF_ANGLE }
+        : null;
+      return { x: e.x, y: e.y, phase: e.phase, hp: e.hp, radius: CONFIG.BALL.R,
+               bladeCooldown: 0, hammerCooldown: 0, bladeZone: zone };
+    };
     return { tick: this.state.tick || 0, self: norm(me), opp: norm(op),
              arena: { W: CONFIG.VIEW.W, H: CONFIG.VIEW.H, BALL_R: CONFIG.BALL.R,
-                      HIT_R: CONFIG.CHARGE.HIT_R, HIT_OFFSET: CONFIG.CHARGE.HIT_OFFSET,
-                      CHARGE_DISTANCE: CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000 } };
+                      RADIUS: CONFIG.BALL.R,
+                      BLADE_RADIUS: CONFIG.BLADE.RADIUS, BLADE_HALF_ANGLE: CONFIG.BLADE.HALF_ANGLE,
+                      HAMMER_RADIUS: CONFIG.HAMMER.RADIUS, HAMMER_HALF_ANGLE: CONFIG.HAMMER.HALF_ANGLE } };
   }
   /* 快照渲染（访客屏）：两球 + 特效 + 血条（复用 drawBall 语义的轻量版） */
   render(ctx) {
@@ -2442,16 +2614,21 @@ class GuestClient {
     ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
     this.fx.render(ctx);
     for (const [ent, color] of [[this.state.p1, CONFIG.COLOR.PLAYER], [this.state.p2, CONFIG.COLOR.GHOST]]) {
-      if (!ent || ent.phase === 'DEAD') continue;
+      if (!ent || ent.phase === CombatState.DEAD) continue;
       ctx.save();
+      /* v4.0 增亮：双层外晕（与 Match.drawBall 同语言） */
+      const glow = ent === this.state.p1 ? CONFIG.FX.GLOW.PLAYER : CONFIG.FX.GLOW.GHOST;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = glow.A * 0.45;
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(ent.x, ent.y, glow.R, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = glow.A;
+      ctx.beginPath(); ctx.arc(ent.x, ent.y, CONFIG.BALL.R * 1.35, 0, Math.PI * 2); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
       ctx.shadowColor = color; ctx.shadowBlur = 18;
+      ctx.globalAlpha = 1;
       ctx.fillStyle = color;
       ctx.beginPath(); ctx.arc(ent.x, ent.y, CONFIG.BALL.R, 0, Math.PI * 2); ctx.fill();
-      if (ent.phase === 'GUARD') {         // guard_halo 附着型：按 phase 复现（events 中已剔除）
-        ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5;
-        ctx.beginPath(); ctx.arc(ent.x, ent.y, 20, 0, Math.PI * 2); ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
       ctx.restore();
     }
     ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
@@ -3224,7 +3401,7 @@ if (typeof document !== 'undefined') {
   app.start();
 } else if (typeof globalThis !== 'undefined') {
   globalThis.__EXPORTS__ = { CONFIG, Combat, CombatState, Recorder, GhostPlayer,
-                             Player, Dummy, Ball, checkChargeHit, hitCircleOf, adjudicate,
+                             Player, Dummy, Ball, checkAttackHit, sectorOf, sectorHits, adjudicate,
                              resolveOverlap, Input, FXSystem, Match, TitleScreen,
                              serializeReplay, deserializeReplay, LocalGhostStore,
                              onSelfWin, onSelfLose, onBossSoloWin, onBossSoloLose,

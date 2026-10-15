@@ -98,3 +98,32 @@ OrbAI.releaseSeat(): Promise<void>   // 释放座位回观战席
 - [ ] createRoom/joinRoom/confirmAnswer 三步配对在两个浏览器实例间跑通。
 - [ ] claimSeat 后 AI 输入经 DataChannel 生效且与人类输入对拍一致。
 - [ ] 纯静态托管（无任何后端）下配对流完整可用。
+
+---
+
+# v4.0 小改 · OrbAI 输入结构与快照字段
+
+## Input 结构（替换 v3.0 §4）
+```js
+sendInput({
+  move:   {x, y},                  // 不变（全速、模长忽略）
+  blade:  true | {x,y} | null,     // 左键挥刀；{x,y}=虚拟光标（=准星方向来源）
+  hammer: true | {x,y} | null,     // 右键重锤；同上
+});
+// charge/guard 字段移除（4.0 不识别，传入被忽略 + dev-warn）
+```
+- blade/hammer 的 {x,y} 与桌面鼠标同一坐标管线（准星方向由此派生）。
+
+## Snapshot 字段（替换 v3.0 §3 攻击相关行）
+| 变更 | 说明 |
+|---|---|
+| phase 枚举 | 'idle'\|'move'\|'blade_windup'\|'blade_active'\|'blade_recovery'\|'hammer_windup'\|'hammer_active'\|'hammer_recovery'\|'stagger'\|'dead' |
+| ~~invincible~~ | 移除（时间无敌已不存在） |
+| **bladeZone** | null \| {dirAngle, radius:128, halfAngle:45°}（仅 blade_active 非空）——AI 可读刃区朝向做绕后决策 |
+| bladeCooldown / hammerCooldown | 双冷却剩余 ms |
+| ~~guardElapsed / guardCooldown~~ | 移除 |
+| Orb.radius | 32（新增，体型可视化） |
+
+## 验收补充
+- [ ] 新 Input 结构对拍测试（同序列 human vs OrbAI 轨迹一致）。
+- [ ] bladeZone 快照与实际刃区几何逐帧一致。
