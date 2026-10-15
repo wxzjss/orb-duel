@@ -1,0 +1,4 @@
+.workbuddy/
+.tmp_script.js
+*.log
+node_modules/
