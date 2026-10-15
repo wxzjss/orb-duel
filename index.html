@@ -185,6 +185,15 @@ const CONFIG = {
                   RING: { LIFE: 0.25, R0: 0, R1: 90 } },       // 普通死亡爆裂（14~18 粒）
         /* v4.0 球体增亮（fx.md v4.0 §A）：暗背景 0.1s 锁定双球；双层外晕 'lighter' 混合 */
         GLOW:   { PLAYER: { R: 70, A: 0.85 }, GHOST: { R: 70, A: 0.85 } },
+        /* v4.1 打断/碎刃专属特效（fx.md v4.1 §C） */
+        INTERRUPT: { N_MIN: 6, N_MAX: 8, LIFE: 0.4, SPEED_MIN: 220, SPEED_JITTER: 160, SHAKE: 5 },
+        SHATTER: { N_MIN: 10, N_MAX: 14, LIFE: 0.5, SPEED_MIN: 260, SPEED_JITTER: 220 },
+  },
+  /* v4.1 特写镜头三档（fx.md v4.1 §A）：同帧取最高档；zoom 仅渲染层，timeScale 慢放确定性叠加 */
+  CAMERA: {
+    T1: { ZOOM: 1.25, TS: 0.3,  DUR: 0.250 },   // 普通命中（刀 −1 / 锤普通秒杀 / 锤锤双杀）
+    T2: { ZOOM: 1.35, TS: 0.25, DUR: 0.500 },   // 打断挥锤
+    T3: { ZOOM: 1.5,  TS: 0.2,  DUR: 0.800 },   // 碎刃秒杀
   },
   /* v2.2 顶部血量 UI：3 格光条 24×10 间隔 6；组中心 x≈340/940，y=24；标签在血条下 8px */
   HPBAR: { W: 24, H: 10, GAP: 6, Y: 24, CX_P: 340, CX_G: 940, LABEL_DY: 18, RED_FLASH: 0.150 },
@@ -803,16 +812,29 @@ function adjudicate(events) {
     return { type: 'stagger', a: blades[0].attacker, b: blades[1].attacker };
   }
   if (hammers.length === 2) return { type: 'draw_kill', a: hammers[0].attacker, b: hammers[1].attacker };
+  /* v4.1 ②.5 碎刃裁决（attack.md v4.1 B）：锤判定帧砸在对方刀判定帧刃区内 → 刀方直接秒杀
+   * （无视 HP 与刃区保护）。相位按帧首判（D.1：e.defPhase 缺省回落实时相位） */
+  for (const e of events) {
+    if (e.kind !== 'hammer') continue;
+    const dphase = e.defPhase !== undefined ? e.defPhase : e.defender.combat.phase;
+    if (dphase === CombatState.BLADE_ACTIVE && sectorHits(sectorOf(e.defender), e.attacker)) {
+      return { type: 'break_kill', winner: e.attacker, loser: e.defender };
+    }
+  }
   return { type: 'list', list: events.map(_resolveOne) };
 }
-/* ③ 单条接触的矩阵行判定（5.1 刀→目标 / 5.2 锤→目标） */
+/* ③ 单条接触的矩阵行判定（v4.1 5.1 刀→目标 / 5.2 锤→目标） */
 function _resolveOne(e) {
-  /* 刃区无敌格挡：目标处于刀判定帧且攻击者（接触方）落在其刃区扇形内 */
-  if (e.defender.combat.phase === CombatState.BLADE_ACTIVE &&
+  const dphase = e.defPhase !== undefined ? e.defPhase : e.defender.combat.phase;
+  /* 刃区格挡（仅刀保留）：目标刀判定帧且攻击者落在其刃区内 → 刀光消散
+   * （v4.1 修订：锤砸刃区已在 ②.5 裁决为碎刃秒杀，不再走此通道） */
+  if (e.kind === 'blade' && dphase === CombatState.BLADE_ACTIVE &&
       sectorHits(sectorOf(e.defender), e.attacker)) {
     return { type: 'ineffective', attacker: e.attacker, defender: e.defender };
   }
   if (e.kind === 'hammer') return { type: 'kill', winner: e.attacker, loser: e.defender };
+  /* v4.1 打断：刀命中锤起手（全身无保护）→ −1 HP + 锤相位取消（结算见 Match.resolveHits） */
+  if (dphase === CombatState.HAMMER_WINDUP) return { type: 'interrupt', winner: e.attacker, loser: e.defender };
   return { type: 'hit', winner: e.attacker, loser: e.defender };
 }
 
@@ -832,6 +854,61 @@ function resolveOverlap(a, b) {
   a.y = clamp(a.y - uy * push, i, CONFIG.VIEW.H - i);
   b.x = clamp(b.x + ux * push, i, CONFIG.VIEW.W - i);
   b.y = clamp(b.y + uy * push, i, CONFIG.VIEW.H - i);
+}
+
+/* ============================================================
+ * §5.5 CameraSystem —— 特写镜头（fx.md v4.1）：仅渲染层变换 + timeScale 慢放
+ * zoom 以接触点为锚 ease-in-out 回 1.0；同帧多时刻取最高档（T3>T2>T1）；
+ * 特写时长走缩放后时间（hitstop 冻结期同步暂停＝「包裹」语义）。
+ * 逻辑坐标零影响：replay / 联机确定性不受 zoom 变换影响。
+ * ============================================================ */
+class CameraSystem {
+  constructor() {
+    this.active = false;
+    this.tier = 0;
+    this.t = 0; this.dur = 0;
+    this.anchor = { x: 0, y: 0 };
+    this._pending = null;               // 本帧待决时刻（同帧取最高档）
+  }
+  /* 逻辑期入队（resolveHits 裁决 / 访客快照事件流） */
+  queue(tier, x, y) {
+    if (!this._pending || tier > this._pending.tier) this._pending = { tier, x, y };
+  }
+  /* 帧首提交：高档抢占进行中的低档（不叠加）；低档不打断高档 */
+  beginFrame() {
+    if (this._pending) {
+      if (!this.active || this._pending.tier > this.tier) {
+        this.active = true;
+        this.tier = this._pending.tier;
+        this.t = 0;
+        this.dur = CONFIG.CAMERA['T' + this.tier].DUR;
+        this.anchor = { x: this._pending.x, y: this._pending.y };
+      }
+      this._pending = null;
+    }
+  }
+  /* dt = 世界体验时间（缩放后）：hitstop（scale=0）期间特写同步冻结 */
+  update(dt) {
+    if (!this.active) return;
+    this.t += dt;
+    if (this.t >= this.dur) { this.active = false; this.tier = 0; }
+  }
+  /* 逻辑时间缩放：激活档的 TS（叠加取最高档），未激活 = 1 */
+  timeScale() { return this.active ? CONFIG.CAMERA['T' + this.tier].TS : 1; }
+  /* 仅渲染层：zoom 朝接触点 ease-in-out 包络（0→1→0），结束回 1.0；
+   * 触控坐标换算不经过此 transform（触屏 hit 检测豁免） */
+  applyTransform(ctx, W, H) {
+    if (!this.active) return;
+    const spec = CONFIG.CAMERA['T' + this.tier];
+    const p = clamp(this.t / this.dur, 0, 1);
+    const env = 0.5 - 0.5 * Math.cos(p * Math.PI);      // ease-in-out
+    const zoom = 1 + (spec.ZOOM - 1) * env;
+    const cx = lerp(W / 2, this.anchor.x, env);
+    const cy = lerp(H / 2, this.anchor.y, env);
+    ctx.translate(cx, cy);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-cx, -cy);
+  }
 }
 
 /* ============================================================
@@ -995,6 +1072,31 @@ class FXSystem {
                           y: ev.y + Math.sin(ev.ang) * CONFIG.HAMMER.RADIUS * 0.7,
                           life: FX.HAMMER_RING.LIFE, maxLife: FX.HAMMER_RING.LIFE,
                           r0: 0, r1: FX.HAMMER_RING.R1 });
+        this.shake = Math.max(this.shake, CONFIG.SHAKE.HAMMER);
+        break;
+      }
+      case 'interrupt_fx': {           // v4.1 T2 打断：锤脱手粒子 6~8 枚沿锤方向惯性飞散 + 震屏 5px
+        const IT = FX.INTERRUPT;       // （锤弧截断消散由 camera 慢放窗口内的光弧自然消退呈现）
+        const n = IT.N_MIN + Math.floor(r() * (IT.N_MAX - IT.N_MIN + 1));
+        for (let k = 0; k < n; k++) {
+          const a = (ev.ang || 0) + (r() - 0.5) * 1.2;
+          const sp = IT.SPEED_MIN + r() * IT.SPEED_JITTER;
+          this._spawn(ev.x, ev.y, Math.cos(a) * sp, Math.sin(a) * sp,
+                      IT.LIFE, 2 + r() * 2, '#ff8a7a', 'dot');
+        }
+        this.shake = Math.max(this.shake, IT.SHAKE);
+        break;
+      }
+      case 'blade_shatter': {          // v4.1 T3 碎刃：刃片 10~14 枚沿弧缘法线飞散（秒杀爆裂由 burst kill 承担）
+        const SH = FX.SHATTER;
+        const n = SH.N_MIN + Math.floor(r() * (SH.N_MAX - SH.N_MIN + 1));
+        for (let k = 0; k < n; k++) {
+          const a = (ev.ang || 0) + (r() - 0.5) * CONFIG.BLADE.HALF_ANGLE * 2;
+          const sp = SH.SPEED_MIN + r() * SH.SPEED_JITTER;
+          this._spawn(ev.x + Math.cos(a) * CONFIG.BLADE.RADIUS * 0.6,
+                      ev.y + Math.sin(a) * CONFIG.BLADE.RADIUS * 0.6,
+                      Math.cos(a) * sp, Math.sin(a) * sp, SH.LIFE, 2 + r() * 2, '#dff2ff', 'dot');
+        }
         this.shake = Math.max(this.shake, CONFIG.SHAKE.HAMMER);
         break;
       }
@@ -1496,6 +1598,7 @@ class Match {
     this.mirrorReplay = null;          // 第 1 关（教学）录制段 → 第 2 关幽灵来源
     this.lastWinReplay = null;         // v2.1 无限链：第 N 关胜利段 → 第 N+1 关幽灵（N≥2）
     this.recorder = new Recorder();    // Recorder 全局化：按对局尝试分段，仅胜利段作幽灵源
+    this.camera = new CameraSystem();  // v4.1 特写镜头：仅渲染层 + timeScale 慢放（fx.md v4.1 §B）
     /* v2.3 镜像复刻：offset = 幽灵出生点 − 镜像后玩家出生点（CONFIG 推导，勿硬编码；
      * 镜像变换 x'=1280−x 已把玩家轨迹映射到幽灵侧，推导结果 = (0,0)） */
     this.offset = {
@@ -1584,6 +1687,7 @@ class Match {
       const r = checkAttackHit(this.player, this.dummy);
       if (r) {
         this.player.combat._hitVictims.add(this.dummy);
+        this.fx.queue.push({ type: 'camera', tier: 1, x: this.dummy.x, y: this.dummy.y });   // v4.1 有效命中 = T1
         if (r === 'hammer') {                        // 锤秒杀：无视 HP 直接击碎
           this.dummy.combat.kill();
           this._emitKillBurst(this.dummy, CONFIG.COLOR.GHOST);
@@ -1603,12 +1707,12 @@ class Match {
     if (!g) return;
     const p = this.player;
 
-    // Step1 收集（只读，对称顺序，不产生副作用）
+    // Step1 收集（只读，对称顺序，不产生副作用；defPhase = 帧首相位，v4.1 D.1）
     const events = [];
     const r1 = checkAttackHit(p, g);
-    if (r1) events.push({ attacker: p, defender: g, kind: r1 });
+    if (r1) events.push({ attacker: p, defender: g, kind: r1, defPhase: g._fsPhase });
     const r2 = checkAttackHit(g, p);
-    if (r2) events.push({ attacker: g, defender: p, kind: r2 });
+    if (r2) events.push({ attacker: g, defender: p, kind: r2, defPhase: p._fsPhase });
 
     // Step2 裁决（本步内原子完成，禁止跨帧分判；§5.3 顺序①→②→③在 adjudicate 内实现）
     const verdict = adjudicate(events);
@@ -1627,11 +1731,19 @@ class Match {
       this._hitFlashP = Math.max(this._hitFlashP, CONFIG.CLASH.FLASH);   // 双方白闪 60ms
       this._hitFlashG = Math.max(this._hitFlashG, CONFIG.CLASH.FLASH);
       this.fx.shake = Math.max(this.fx.shake, CONFIG.SHAKE.COLLIDE);
+      /* 刀刀弹开不触发特写（attack.md v4.1 A：维持节奏） */
+    } else if (verdict.type === 'break_kill') {    // v4.1 ②.5 碎刃秒杀（T3）：刀方无视 HP 与刃区保护
+      verdict.loser.combat.kill();
+      this.fx.queue.push({ type: 'blade_shatter', x: verdict.loser.x, y: verdict.loser.y, ang: verdict.loser.facing });
+      this.fx.queue.push({ type: 'camera', tier: 3, x: verdict.loser.x, y: verdict.loser.y });
+      this._onEntityDead(verdict.loser, p, true);   // 秒杀爆裂 + KILL_HITSTOP（demo → endDemo）
     } else if (verdict.type === 'draw_kill') {     // ② 锤锤互中 → 双方同时秒杀 → DRAW 复活
       verdict.a.combat.kill();
       verdict.b.combat.kill();
       this._emitKillBurst(verdict.a, CONFIG.COLOR.PLAYER);
       this._emitKillBurst(verdict.b, CONFIG.COLOR.GHOST);
+      this.fx.queue.push({ type: 'camera', tier: 1,          // v4.1：普通秒杀档（锚点取两球中点）
+                           x: (verdict.a.x + verdict.b.x) / 2, y: (verdict.a.y + verdict.b.y) / 2 });
       this.audio.play('death');
       this.hitstopTimer = Math.max(this.hitstopTimer, CONFIG.HITSTOP);   // DRAW 复活 120ms hitstop
       this.level = 'DRAW';                        // 120ms hitstop + 600ms「同归于尽」横幅 + 自动重开
@@ -1643,6 +1755,7 @@ class Match {
           const loser = v.loser, winner = v.winner;
           winner.combat._hitVictims.add(loser);
           const res = loser.combat.hit();
+          this.fx.queue.push({ type: 'camera', tier: 1, x: loser.x, y: loser.y });   // v4.1 有效命中 = T1
           if (res === 'dead') this._onEntityDead(loser, p, false);
           else {
             this._onNonLethalHit(loser, loser === p ? 'P' : 'G');
@@ -1650,11 +1763,27 @@ class Match {
                                  color: loser === p ? CONFIG.COLOR.PLAYER : CONFIG.COLOR.GHOST,
                                  shake: 0, kill: false, small: true });   // 命中火花（小爆裂、零震屏）
           }
-        } else if (v.type === 'kill') {            // 锤秒杀：无视 HP 直接进死亡流程
+        } else if (v.type === 'interrupt') {       // v4.1 打断挥锤（T2）：−1 HP + 锤相位取消回 IDLE + 冷却不启动
+          const loser = v.loser, winner = v.winner;
+          winner.combat._hitVictims.add(loser);
+          const res = loser.combat.hit();
+          if (res === 'dead') {                    // 打断致死：按普通死亡收束（T1 已在 hit 通道？此处补 T1）
+            this.fx.queue.push({ type: 'camera', tier: 1, x: loser.x, y: loser.y });
+            this._onEntityDead(loser, p, false);
+          } else {
+            this._onNonLethalHit(loser, loser === p ? 'P' : 'G');
+            loser.combat.phase = CombatState.IDLE;     // 锤相位取消（含判定帧迁移场景：帧首 windup 判打断）
+            loser.combat.t = 0;
+            loser.combat.hammerCooldown = 0;           // 未完成出招不算出招（attack.md v4.1 C.2）
+            this.fx.queue.push({ type: 'interrupt_fx', x: loser.x, y: loser.y, ang: loser.facing });
+            this.fx.queue.push({ type: 'camera', tier: 2, x: loser.x, y: loser.y });
+          }
+        } else if (v.type === 'kill') {            // 锤秒杀（刃区外，普通）：无视 HP 直接进死亡流程
           v.loser.combat.kill();
           v.winner.combat._hitVictims.add(v.loser);
+          this.fx.queue.push({ type: 'camera', tier: 1, x: v.loser.x, y: v.loser.y });   // v4.1 = T1
           this._onEntityDead(v.loser, p, true);
-        } else {                                   // ineffective：刃区格挡，光弧提前消散
+        } else {                                   // ineffective：刃区格挡（仅刀，v4.1），光弧提前消散
           v.attacker.combat._hitVictims.add(v.defender);
           this.fx.queue.push({ type: 'blade_swing', x: v.attacker.x, y: v.attacker.y,
                                ang: v.attacker.facing, color: '#fff', fade: true });
@@ -1748,11 +1877,14 @@ class Match {
       }
     }
 
+    this.camera.beginFrame();          // v4.1：上一帧裁决的特写待决事件生效（同帧取最高档，高档抢占）
+
     // 控制 #5：timeScale 只在此处乘一次
     let scale = 1;
     if (this.hitstopTimer > 0) { this.hitstopTimer -= dt; scale = 0; }
     else if (this.slowTimer > 0) { this.slowTimer -= dt; scale = Math.min(scale, this.slowTimer > 0 ? CONFIG.DEATH_SLOW.SCALE : 1); }
     const effDt = dt * scale;
+    const worldDt = effDt * this.camera.timeScale();   // v4.1 特写慢放叠加（fx.md v4.1 §B；hitstop 优先冻结）
 
     const rDown = this.input.isDown('KeyR');
     const rPressed = rDown && !this.prevR;
@@ -1769,8 +1901,10 @@ class Match {
         this.matchTime += dt;
         if (this.mode === 'demo') {
           /* v3.0 demo 对局：双输入源同通路（ADR-009），无录制无播种 */
-          this.player.update(effDt, this.p1Input, this);
-          this.p2.update(effDt, this.p2Input, this);
+          this.player._fsPhase = this.player.combat.phase;   // v4.1 帧首相位快照（D.1：同帧迁移按帧首判）
+          this.p2._fsPhase = this.p2.combat.phase;
+          this.player.update(worldDt, this.p1Input, this);
+          this.p2.update(worldDt, this.p2Input, this);
           resolveOverlap(this.player, this.p2);
           this.resolveHits();
           if (!this.ended && this.matchTime >= this.timeLimit) {   // §6.2 超时：HP 多者胜 / 同 HP DRAW
@@ -1778,8 +1912,11 @@ class Match {
             this.endDemo(hpP > hpG ? 'P1' : hpG > hpP ? 'P2' : null, null);
           }
         } else {
-          this.player.update(effDt, this.input, this);
-          if (this.ghost) this.ghost.update(this.tick, effDt, this);   // 回放 tick = Match.tick
+          this.player._fsPhase = this.player.combat.phase;   // v4.1 帧首相位快照
+          if (this.ghost) this.ghost._fsPhase = this.ghost.combat.phase;
+          if (this.dummy) this.dummy._fsPhase = this.dummy.combat.phase;
+          this.player.update(worldDt, this.input, this);
+          if (this.ghost) this.ghost.update(this.tick, worldDt, this);   // 回放 tick = Match.tick
           if (this.dummy || this.ghost) {
             const foe = this.ghost || this.dummy;
             resolveOverlap(this.player, foe);   // v2.2 E：实体碰撞软推挤（判定圈随实际球心）
@@ -1828,7 +1965,8 @@ class Match {
 
     this.fxHooks();
     this.fx.flush();
-    this.fx.update(effDt);             // hitstop 期间粒子冻结（fx.md §8）
+    this.fx.update(worldDt);           // hitstop 期间粒子冻结（fx.md §8）；v4.1 特写慢放同步
+    this.camera.update(worldDt);       // v4.1 特写时长走缩放后时间（hitstop 冻结期暂停）
     this.input.endFrame();
   }
 
@@ -1900,7 +2038,11 @@ class Match {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
 
-    // 屏幕震动：渲染层偏移（fx.md v1.1：不回写世界坐标）
+    // v4.1 特写镜头：仅渲染层变换（zoom 朝接触点；触控坐标换算不经此 transform）
+    ctx.save();
+    this.camera.applyTransform(ctx, CONFIG.VIEW.W, CONFIG.VIEW.H);
+
+    // 屏幕震动：渲染层偏移（fx.md v1.1：不回写世界坐标；与 zoom 变换复合）
     if (this.fx.shake > 0) {
       ctx.translate((Math.random() - 0.5) * 2 * this.fx.shake,
                     (Math.random() - 0.5) * 2 * this.fx.shake);
@@ -1922,7 +2064,8 @@ class Match {
     if (this.player && this.player.combat && this.player.combat.phase !== CombatState.DEAD)
       this.drawBall(ctx, this.player, CONFIG.COLOR.PLAYER, 1, true);
 
-    // UI / 横幅
+    // UI / 横幅（特写 zoom 不作用于 HUD）
+    ctx.restore();
     this.renderUI(ctx);
     ctx.restore();
   }
@@ -2497,6 +2640,7 @@ class HostRoom {
 class GuestClient {
   constructor(fx) {
     this.fx = fx || new FXSystem();
+    this.camera = new CameraSystem();   // v4.1：访客/观战同步播放特写（modes.md v4.1）
     this.chan = null;
     this.state = { p1: null, p2: null };   // 最新快照（一期直渲最新帧，插值后续可选）
     this.phase = 'WAITING';
@@ -2511,7 +2655,12 @@ class GuestClient {
     chan.onSnap((f) => {
       if (f.t === 'snapshot') {
         this.state = { p1: f.p1, p2: f.p2, tick: f.tick };
-        for (const ev of f.events || []) this.fx.queue.push(ev);
+        for (const ev of f.events || []) {
+          if (ev.type === 'camera') { this.camera.queue(ev.tier, ev.x, ev.y); continue; }   // v4.1：表现层消费，FXSystem 对其静默忽略
+          this.fx.queue.push(ev);        // 未知事件类型由 FXSystem default 静默忽略（modes.md v4.1 兼容规则）
+        }
+        this.camera.beginFrame();
+        this.camera.update(CONFIG.STEP); // 访客端按固定步推进特写（与权威 tick 同节奏）
         this.fx.flush(); this.fx.update(CONFIG.STEP);
       }
     });
@@ -2612,6 +2761,8 @@ class GuestClient {
   render(ctx) {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+    ctx.save();
+    this.camera.applyTransform(ctx, CONFIG.VIEW.W, CONFIG.VIEW.H);   // v4.1：观战端与对战者同一特写
     this.fx.render(ctx);
     for (const [ent, color] of [[this.state.p1, CONFIG.COLOR.PLAYER], [this.state.p2, CONFIG.COLOR.GHOST]]) {
       if (!ent || ent.phase === CombatState.DEAD) continue;
@@ -2631,6 +2782,7 @@ class GuestClient {
       ctx.beginPath(); ctx.arc(ent.x, ent.y, CONFIG.BALL.R, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
+    ctx.restore();
     ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('P1 ' + this.p1Wins + ' : ' + this.p2Wins + ' P2', CONFIG.VIEW.W / 2, 40);
   }
@@ -3413,6 +3565,7 @@ if (typeof document !== 'undefined') {
                              /* v3.1：WebRTC 配对码联机（selftest T18/T19/T20） */
                              NET, b64urlEncode, b64urlDecode, packSDP, unpackSDP, buildSDP,
                              errCode, whenDcOpen, NetChannel, PairingHost, PairingGuest,
+                             CameraSystem,
                              NetInputSource, HostRoom, GuestClient };
 }
 

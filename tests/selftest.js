@@ -36,7 +36,7 @@ const { CONFIG, Combat, CombatState, Recorder, GhostPlayer, Player, Dummy,
         deepFreeze, VirtualJoystick, TouchButton, TouchSource,
         NET, b64urlEncode, b64urlDecode, packSDP, unpackSDP, buildSDP,
         errCode, whenDcOpen, NetChannel, PairingHost, PairingGuest,
-        NetInputSource, HostRoom, GuestClient } = E;
+        CameraSystem, NetInputSource, HostRoom, GuestClient } = E;
 
 let pass = 0, fail = 0;
 function ok(cond, name) {
@@ -325,14 +325,34 @@ console.log('[T3] sectorHits 几何容差 + checkAttackHit 矩阵（刀 hit/锤 
   ok(vk.type === 'draw_kill' && (vk.a === m1 || vk.a === m2), '② 双锤互中 → draw_kill（同归于尽）');
   ok(adjudicate([{ attacker: m1, defender: m2, kind: 'hammer' }]).type === 'list',
      '单锤事件（对方锤区未及）不触发 ②，落 ③ kill');
-  // ③ 混合事件：锤+刀互覆盖 → ineffective（defender 刀区护前）+ kill（defender 被锤杀）
+  // ②.5 碎刃（v4.1 反转 v4.0 格挡行，attack.md v4.1 B）：锤判定帧砸在对方刀判定帧刃区内 → 刀方直接秒杀
   const ha = mkAttacker(500, 360, 0, 'hammer');
-  const db = mkAttacker(564, 360, Math.PI, 'blade');  // 对手刀判定帧朝左（面向锤）
-  const vm = adjudicate([{ attacker: ha, defender: db, kind: 'hammer' },
+  const db = mkAttacker(564, 360, Math.PI, 'blade');  // 对手刀判定帧朝左（面向锤，刃区覆盖锤）
+  const vb = adjudicate([{ attacker: ha, defender: db, kind: 'hammer', defPhase: CombatState.BLADE_ACTIVE },
                          { attacker: db, defender: ha, kind: 'blade' }]);
-  ok(vm.type === 'list' && vm.list.length === 2 &&
-     vm.list[0].type === 'ineffective' && vm.list[1].type === 'hit',
-     '③ 混合逐点：defender 刀判定帧且攻击者在其刃区 → 锤被格挡 ineffective；defender 的刀打锤判定帧 → hit');
+  ok(vb.type === 'break_kill' && vb.winner === ha && vb.loser === db,
+     '②.5 碎刃：锤判定帧×对方刀判定帧刃区相交 → break_kill（v4.1 推翻 v4.0「无效格挡」行）');
+  const vb2 = adjudicate([{ attacker: ha, defender: db, kind: 'hammer' }]);
+  ok(vb2.type === 'break_kill', '②.5：defPhase 缺省回落实时相位（纯函数契约延续，控制 #15）');
+  // ②.5 负向：锤砸刀判定帧但落点在刃区外（背对）→ 落 ③ 普通秒杀（kill，T1 档）
+  const hb2 = mkAttacker(500, 360, 0, 'hammer');
+  const db2 = mkAttacker(564, 360, 0, 'blade');       // 刀判定帧朝右（背对锤）
+  const vn = adjudicate([{ attacker: hb2, defender: db2, kind: 'hammer', defPhase: CombatState.BLADE_ACTIVE }]);
+  ok(vn.type === 'list' && vn.list.length === 1 && vn.list[0].type === 'kill',
+     '②.5 负向：锤落点在对方刃区外 → ③ kill（普通秒杀，T1）');
+  // ③ 打断（v4.1 新增，attack.md v4.1 C）：刀命中锤起手（帧首 windup）→ interrupt
+  const ib = mkAttacker(500, 360, 0, 'blade');
+  const hw = mkBall(564, 360, Math.PI);
+  hw.combat.phase = CombatState.HAMMER_WINDUP;
+  const vi = adjudicate([{ attacker: ib, defender: hw, kind: 'blade', defPhase: CombatState.HAMMER_WINDUP }]);
+  ok(vi.type === 'list' && vi.list.length === 1 && vi.list[0].type === 'interrupt' && vi.list[0].winner === ib,
+     '③ 打断：刀命中锤起手 → interrupt（−1 HP + 相位取消 + 冷却不启动，T2 特写通道）');
+  // ③ 刀 vs 刀刃区格挡保留（v4.1 仅反转锤行）：defender 刀判定帧且刀攻击者在其刃区 → ineffective
+  const gb1 = mkAttacker(500, 360, 0, 'blade');
+  const gb2 = mkAttacker(564, 360, Math.PI, 'blade');
+  const vg = adjudicate([{ attacker: gb1, defender: gb2, kind: 'blade', defPhase: CombatState.BLADE_ACTIVE }]);
+  ok(vg.type === 'list' && vg.list[0].type === 'ineffective',
+     '③ 刀 vs 刀刃区格挡保留（v4.1 未改此行）→ ineffective');
   // ③ 单刀事件 → hit
   const s1 = mkAttacker(500, 360, 0, 'blade');
   const vhit = adjudicate([{ attacker: s1, defender: mkBall(564, 360, Math.PI), kind: 'blade' }]);
@@ -541,6 +561,15 @@ console.log('[T11] isModeAvailable（IA）+ hudLines 逐字 + HPBAR 布局 + v4.
      '重锤 FX 常量：弧 250ms/宽32 + 冲击环 r1=70 + 汇聚 12 枚');
   ok(CONFIG.FX.KILL.RING.R1 === 90 && CONFIG.FX.KILL.RING2.R1 === 130,
      '秒杀爆裂双层环 r1=90/130');
+  ok(CONFIG.CAMERA && CONFIG.CAMERA.T1.ZOOM === 1.25 && CONFIG.CAMERA.T1.TS === 0.3 &&
+     CONFIG.CAMERA.T1.DUR === 0.250 &&
+     CONFIG.CAMERA.T2.ZOOM === 1.35 && CONFIG.CAMERA.T2.TS === 0.25 && CONFIG.CAMERA.T2.DUR === 0.500 &&
+     CONFIG.CAMERA.T3.ZOOM === 1.5 && CONFIG.CAMERA.T3.TS === 0.2 && CONFIG.CAMERA.T3.DUR === 0.800,
+     'v4.1 特写三档：T1 1.25/0.3/250ms · T2 1.35/0.25/500ms · T3 1.5/0.2/800ms');
+  ok(CONFIG.FX.INTERRUPT.N_MIN === 6 && CONFIG.FX.INTERRUPT.N_MAX === 8 &&
+     CONFIG.FX.INTERRUPT.LIFE === 0.4 && CONFIG.FX.INTERRUPT.SHAKE === 5 &&
+     CONFIG.FX.SHATTER.N_MIN === 10 && CONFIG.FX.SHATTER.N_MAX === 14 && CONFIG.FX.SHATTER.LIFE === 0.5,
+     'v4.1 打断/碎刃特效参数：脱手 6~8 枚 400ms 震5px / 刃片 10~14 枚 500ms');
   ok(CONFIG.FX.SPEEDLINES === undefined && CONFIG.FX.AFTERIMAGE === undefined &&
      CONFIG.FX.WINDUP === undefined && CONFIG.FX.BREAK === undefined &&
      CONFIG.FX.STUN === undefined && CONFIG.FX.DENY === undefined,
@@ -781,6 +810,29 @@ console.log('[T13] FX 运行时：挥刀弧光 128px 双层 / 残影 2 段 22.5p
      'fade 无火花零震屏');
   fx5.update(0.05);
   ok(fx5.arcs.length === 0, '40ms 后弧光消退');
+
+  // —— (g2) v4.1 interrupt_fx：锤脱手粒子 6~8 枚 + 震屏 5px ——
+  const fx6 = new FXSystem();
+  fx6.queue.push({ type: 'interrupt_fx', x: 400, y: 300, ang: 0 });
+  fx6.flush();
+  const itParts = fx6.pool.filter((p) => p.alive && p.kind === 'dot' && p.life > 0).length;
+  ok(itParts >= CONFIG.FX.INTERRUPT.N_MIN && itParts <= CONFIG.FX.INTERRUPT.N_MAX,
+     'v4.1 打断：锤脱手粒子 6~8 枚（沿锤方向惯性）');
+  ok(fx6.shake > 0, 'v4.1 打断震屏 5px');
+  // —— (g3) v4.1 blade_shatter：刃片 10~14 枚沿弧缘法线飞散 ——
+  const fx7 = new FXSystem();
+  fx7.queue.push({ type: 'blade_shatter', x: 400, y: 300, ang: Math.PI / 2 });
+  fx7.flush();
+  const shParts = fx7.pool.filter((p) => p.alive && p.kind === 'dot' && p.life > 0).length;
+  ok(shParts >= CONFIG.FX.SHATTER.N_MIN && shParts <= CONFIG.FX.SHATTER.N_MAX, 'v4.1 碎刃：刃片 10~14 枚');
+  ok(fx7.shake > 0, 'v4.1 碎刃震屏（贯穿弧由 hammer_strike 通道承担）');
+  // —— (g4) v4.1 camera 事件对 FXSystem 静默（modes.md v4.1 未知事件兼容规则） ——
+  const fx8 = new FXSystem();
+  fx8.queue.push({ type: 'camera', tier: 3, x: 100, y: 100 });
+  fx8.flush();
+  ok(fx8.pool.filter((p) => p.alive && p.life > 0).length === 0 && fx8.arcs.length === 0 &&
+     fx8.rings.length === 0 && fx8.afterimages.length === 0,
+     'camera 事件经 FXSystem 静默忽略不报错（旧消费方兼容）');
 
   // —— (h) v3.x 通道防复活 ——
   ok(fx.speedlines === undefined && fx.halos === undefined, 'speedlines/halos 通道已从 FXSystem 删除');
@@ -1269,6 +1321,139 @@ console.log('[T18] 房间码：packSDP/unpackSDP 往返（fingerprint/ICE 凭据
      'base64url 往返（- _ 字符安全）');
 }
 
+/* ---------- T21 v4.1 特写镜头 + 碎刃/打断 集成 ---------- */
+console.log('[T21] CameraSystem 三档/同帧最高档/高档抢占/渲染层隔离 + 碎刃秒杀（满血也死）+ 打断（相位取消·冷却不启动）+ 对拍');
+{
+  const mkIdleV61 = (seat) => new AIInput(
+    { name: 'idle', think() { return { move: { x: 0, y: 0 }, blade: false, hammer: false }; } }, seat);
+  const mkDeps = () => ({ input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } });
+
+  // —— (a) CameraSystem 单元：三档 / 同帧最高档 / 低档不抢占 / 高档抢占 / 时长走缩放后时间 ——
+  {
+    const cam = new CameraSystem();
+    ok(cam.active === false && cam.timeScale() === 1, '初始：未激活 timeScale=1');
+    cam.queue(1, 400, 360);
+    cam.queue(3, 500, 360);                 // 同帧 T1+T3
+    cam.beginFrame();
+    ok(cam.active && cam.tier === 3 && cam.anchor.x === 500,
+       '同帧多时刻取最高档（T3>T1）且锚点随高档');
+    ok(Math.abs(cam.timeScale() - 0.2) < 1e-9, 'T3 timeScale=0.2');
+    cam.queue(2, 0, 0);
+    cam.beginFrame();
+    ok(cam.tier === 3, '低档不打断进行中的高档（不叠加）');
+    cam.update(CONFIG.CAMERA.T3.DUR / 2);
+    ok(cam.active, '半程仍在特写中');
+    cam.update(CONFIG.CAMERA.T3.DUR);
+    ok(!cam.active && cam.timeScale() === 1, '特写结束回 1.0');
+
+    const cam2 = new CameraSystem();
+    cam2.queue(1, 100, 100); cam2.beginFrame();
+    ok(cam2.tier === 1 && Math.abs(cam2.timeScale() - 0.3) < 1e-9, 'T1 激活（ts 0.3）');
+    cam2.queue(3, 200, 200); cam2.beginFrame();
+    ok(cam2.tier === 3 && Math.abs(cam2.dur - 0.800) < 1e-9 && cam2.anchor.x === 200,
+       '高档抢占：T1 播放中 T3 立即接管（时长/锚点重置）');
+
+    const calls = [];
+    const ctxStub = { translate: (...a) => calls.push(['t', ...a]),
+                      scale: (...a) => calls.push(['s', ...a]) };
+    const probe = { x: 123.456, y: 234.567 };
+    cam2.update(0.2);
+    cam2.applyTransform(ctxStub, 1280, 720);
+    ok(calls.length === 3 && calls[1][0] === 's' && calls[1][1] > 1,
+       'applyTransform 仅走 ctx translate/scale（渲染层变换）');
+    ok(probe.x === 123.456 && probe.y === 234.567, '变换不触碰任何逻辑坐标');
+  }
+
+  // —— (b) ②.5 碎刃 Match 集成：满血刀方被秒杀 + T3 + blade_shatter ——
+  {
+    const deps = mkDeps();
+    let ended = null;
+    const m = new Match(deps, { mode: 'demo', p1Input: mkIdleV61('P1'), p2Input: mkIdleV61('P2'),
+                                onEnd: (seat) => { ended = seat; } });
+    m.update(STEP);
+    m.player.x = 968; m.player.y = 360;
+    m.p2.x = 1032; m.p2.y = 360;
+    m.player.combat.phase = CombatState.HAMMER_ACTIVE;   // P1 锤判定帧
+    m.p2.combat.phase = CombatState.BLADE_ACTIVE;        // P2 刀判定帧朝左（刃区覆盖 P1）
+    m.p2.facing = Math.PI;                               // 白盒：刀区朝左锚定 P1（直接置相位不经 startBlade）
+    m.p2._fsPhase = CombatState.BLADE_ACTIVE;            // 帧首相位（同帧无迁移）
+    resolveOverlap(m.player, m.p2);
+    m.resolveHits();
+    ok(m.p2.combat.phase === CombatState.DEAD && m.p2.combat.hp === 0,
+       '②.5 碎刃：满血（HP=3）刀方被秒杀（无视 HP 与刃区保护）');
+    ok(m.player.combat.hp === 3 && ended === 'P1', '碎刃后锤方无伤，demo 收束 seat=P1');
+    const q = m.fx.queue.concat(m.fx.lastEmitted || []);
+    ok(q.some((e) => e.type === 'camera' && e.tier === 3), '碎刃 → camera T3 事件产出');
+    ok(q.some((e) => e.type === 'blade_shatter'), '碎刃 → blade_shatter 特效产出');
+  }
+
+  // —— (c) 打断 Match 集成：刀命中锤起手 → −1 HP + 相位回 IDLE + 冷却不启动 + T2 ——
+  {
+    const deps = mkDeps();
+    const m = new Match(deps, { mode: 'demo', p1Input: mkIdleV61('P1'), p2Input: mkIdleV61('P2') });
+    m.update(STEP);
+    m.player.x = 968; m.player.y = 360;
+    m.p2.x = 1032; m.p2.y = 360;
+    m.player.combat.phase = CombatState.BLADE_ACTIVE;    // P1 刀判定帧
+    m.p2.combat.startHammer({ x: -1, y: 0 }, m.tick);    // P2 锤起手（v4.0 出招即置 900ms 冷却）
+    m.p2._fsPhase = CombatState.HAMMER_WINDUP;           // 帧首 = windup（D.1 帧首相位判）
+    resolveOverlap(m.player, m.p2);
+    m.resolveHits();
+    ok(m.p2.combat.hp === 2, '打断：刀命中 −1 HP');
+    ok(m.p2.combat.phase === CombatState.IDLE, '打断：锤相位取消回 IDLE');
+    ok(m.p2.combat.hammerCooldown === 0, '打断：锤冷却不启动（未完成出招不算出招）');
+    const q = m.fx.queue.concat(m.fx.lastEmitted || []);
+    ok(q.some((e) => e.type === 'camera' && e.tier === 2), '打断 → camera T2 事件产出');
+    ok(q.some((e) => e.type === 'interrupt_fx'), '打断 → interrupt_fx 特效产出');
+    ok(m.player.combat.hp === 3, '打断方无伤');
+  }
+
+  // —— (d) zoom 仅渲染层对拍：camera 变换路径全开，逻辑轨迹与无 camera 完全一致 ——
+  {
+    const run = (withCam) => {
+      const deps = mkDeps();
+      const m = new Match(deps, { mode: 'demo',
+                                  p1Input: new AIInput(createBuiltinAI(), 'P1'),
+                                  p2Input: new AIInput(createBuiltinAI(), 'P2') });
+      m.camera.timeScale = () => 1;          // 两跑均隔离慢放（timeScale 为独立确定性机制，见汇报取舍）
+      if (withCam) {                         // B 跑：T3 特写常开（beginFrame/update/applyTransform 全走）
+        m.camera.active = true; m.camera.tier = 3;
+        m.camera.t = 0; m.camera.dur = 1e9;
+        m.camera.anchor = { x: 640, y: 360 };
+      }
+      const traj = [];
+      for (let i = 0; i < 240; i++) {
+        m.update(STEP);
+        if (i % 30 === 0) traj.push(m.player.x.toFixed(3) + ',' + m.player.y.toFixed(3) +
+                                    '|' + m.p2.x.toFixed(3) + ',' + m.p2.y.toFixed(3));
+      }
+      return traj;
+    };
+    const a = run(false), b = run(true);
+    ok(a.length === b.length && a.every((v, i) => v === b[i]),
+       '对拍：camera 激活（zoom 变换全开）期间逻辑坐标轨迹与无 camera 完全一致（9 采样点）');
+  }
+
+  // —— (e) 打断致死：HP=1 锤起手被刀打断 → 按普通死亡收束 ——
+  {
+    const deps = mkDeps();
+    let ended = null;
+    const m = new Match(deps, { mode: 'demo', p1Input: mkIdleV61('P1'), p2Input: mkIdleV61('P2'),
+                                onEnd: (seat) => { ended = seat; } });
+    m.update(STEP);
+    m.player.x = 968; m.player.y = 360;
+    m.p2.x = 1032; m.p2.y = 360;
+    m.p2.combat.hit(); m.p2.combat.hit();                // HP=1
+    m.player.combat.phase = CombatState.BLADE_ACTIVE;
+    m.p2.combat.startHammer({ x: -1, y: 0 }, m.tick);
+    m.p2._fsPhase = CombatState.HAMMER_WINDUP;
+    resolveOverlap(m.player, m.p2);
+    m.resolveHits();
+    ok(m.p2.combat.phase === CombatState.DEAD && ended === 'P1',
+       '打断致死：HP=1 锤起手被刀打断 → 死亡收束（seat=P1）');
+  }
+}
+
 /* ---------- v3.1 联机 stub 工厂（T19/T20 共享；DC 有 connecting→open 生命周期） ---------- */
 function _mkNetDC(name, opts) {
   const dc = { name, opts, readyState: 'connecting', _peer: null, _sends: [], _ls: {},
@@ -1441,13 +1626,23 @@ console.log('[T20] 双端对拍：HostRoom 权威模拟 + GuestClient AI 席 →
 
   let endFrames = [];
   gc.onMatchEnd = (f) => endFrames.push(f);
+  /* v4.1 camera 事件确定性对拍：房主产出（lastEmitted）= 访客收到（钩住 GuestClient.camera.queue） */
+  const hostCams = [], guestCams = [];
+  const guestQueueRaw = gc.camera.queue.bind(gc.camera);
+  gc.camera.queue = (tier, x, y) => { guestCams.push({ tier, x, y }); return guestQueueRaw(tier, x, y); };
   let ticks = 0;
   const maxTicks = Math.ceil(70 / STEP);                 // 70s 上限（T15：内置互战 60s 内收束）
   while (room.p1Wins + room.p2Wins < 1 && ticks < maxTicks) {
-    room.update(STEP);                                   // 房主：模拟 + 快照广播
+    room.update(STEP);                                   // 房主：模拟 + 快照广播（camera 随 events 下发）
+    if (room.match) for (const ev of (room.match.fx.lastEmitted || [])) {
+      if (ev.type === 'camera') hostCams.push({ tier: ev.tier, x: ev.x, y: ev.y });
+    }
     gc.sendInput();                                      // 访客：AI think → input 帧（snap 通道上行）
     ticks++;
   }
+  ok(hostCams.length >= 1 && hostCams.length === guestCams.length &&
+     JSON.stringify(hostCams) === JSON.stringify(guestCams),
+     'v4.1 camera 事件确定性：房主产出 = 访客逐事件收到（' + hostCams.length + ' 个，tier/x/y 全等）');
   ok(room.p1Wins + room.p2Wins >= 1, '完整对局跑到单局 match_end（' + (ticks * STEP).toFixed(1) + 's）');
   ok(endFrames.length === 1 && (endFrames[0].result === 'P1' || endFrames[0].result === 'P2'),
      'match_end 帧 result 通道正确（' + (endFrames[0] ? endFrames[0].result : 'none') + '）');
