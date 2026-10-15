@@ -65,60 +65,17 @@
     <div class="mi" data-act="online">联机对战</div>
     <div class="mi" data-act="self">挑战自我</div>
     <div class="mi" data-act="boss_solo">单机boss</div>
-    <div class="mi" data-act="ai">AI 演示</div>
     <div class="mi" data-act="quit">退出游戏</div>
   </div>
   <div class="scr" id="scr-online">
     <div class="title">联 机 对 战</div>
-    <div id="online-lobby">
-      <div style="color:rgba(255,255,255,.7);font-size:14px;line-height:1.8;text-align:center;">
-        局域网实时对战（二期上线）<br>
-        需房主在本机运行：<code style="color:#7fd8e8;">node server.js</code>（默认端口 8080）
-      </div>
-      <div class="mi" data-ol="create">创建房间</div>
-      <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
-        <input id="online-ip" placeholder="房主 IP" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);color:#fff;padding:8px 10px;border-radius:6px;width:180px;font-size:14px;">
-        <div class="mi" data-ol="join" style="padding:8px 18px;">加入房间</div>
-      </div>
+    <div style="color:rgba(255,255,255,.7);font-size:14px;line-height:1.8;text-align:center;margin-bottom:8px;">
+      配对联机开发中<br>
+      <span style="color:rgba(255,255,255,.45);font-size:12px;">WebRTC 配对方案筹备中（E-41 架构补丁后上线）</span>
     </div>
-    <div id="online-room" style="display:none;">
-      <div style="color:rgba(255,255,255,.75);font-size:14px;">房间态（连接成功后可用——二期）</div>
-      <div style="display:flex;gap:14px;justify-content:center;margin:16px 0;">
-        <div style="width:150px;padding:12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;">P1 席位</div>
-        <div style="width:150px;padding:12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;">P2 席位</div>
-      </div>
-      <div style="color:rgba(255,255,255,.5);font-size:13px;">观战席位 ≤8 · 房主可切换 human/AI · 双方就绪后开始</div>
-    </div>
-    <div id="online-playing" style="display:none;">
-      <div style="color:rgba(255,255,255,.75);font-size:14px;">对局态：复用 GAME 屏 · 三局两胜比分 · 观战者无输入 UI</div>
-    </div>
+    <div class="mi dis" data-ol="create">创建房间</div>
+    <div class="mi dis" data-ol="join">加入房间</div>
     <div class="mi" data-ol="back">返回</div>
-  </div>
-  <div class="scr" id="scr-ai">
-    <div class="title">A I 编 辑</div>
-    <div style="color:#d9a441;font-size:13px;margin-bottom:8px;">⚠ AI 代码将在你的浏览器本地执行，请勿粘贴不可信代码</div>
-    <div style="display:flex;gap:8px;justify-content:center;align-items:center;margin-bottom:8px;">
-      <input id="ai-name" placeholder="AI 名称" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);color:#fff;padding:6px 10px;border-radius:6px;width:140px;font-size:14px;">
-      <select id="ai-builtin" style="background:#1a1a2e;color:#fff;border:1px solid rgba(255,255,255,.25);padding:6px;border-radius:6px;font-size:14px;">
-        <option value="">内置示例…</option>
-        <option value="builtin">追踪+时机冲撞</option>
-      </select>
-    </div>
-    <textarea id="ai-code" spellcheck="false"
-      style="width:640px;max-width:88%;height:170px;background:rgba(0,0,0,.45);color:#cfe8cf;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-family:monospace;font-size:13px;padding:10px;resize:vertical;"
-      placeholder="{ name:'my-ai', think(state){ return { move:{x:0,y:0}, click0:false, guardHeld:false }; } }"></textarea>
-    <div style="display:flex;gap:8px;justify-content:center;margin:10px 0;align-items:center;">
-      <div class="mi" data-ai="load" style="padding:6px 14px;">载入 slot</div>
-      <div class="mi" data-ai="save" style="padding:6px 14px;">保存 slot</div>
-      <select id="ai-slot" style="background:#1a1a2e;color:#fff;border:1px solid rgba(255,255,255,.25);padding:6px;border-radius:6px;font-size:14px;">
-        <option value="0">slot 1</option><option value="1">slot 2</option><option value="2">slot 3</option>
-      </select>
-    </div>
-    <div style="display:flex;gap:14px;justify-content:center;">
-      <div class="mi" data-ai="demo">AI 演示（内置 AI 互战）</div>
-      <div class="mi" data-ai="fight">用此 AI 战斗（你 vs AI）</div>
-    </div>
-    <div class="mi" data-ai="back" style="margin-top:10px;">返回</div>
   </div>
   <div class="scr" id="scr-result">
     <div class="title" id="result-title"></div>
@@ -175,9 +132,12 @@ const CONFIG = {
   BOUND: { INSET: 16 },               // 场地边界内缩
   FX: { POOL: 300, TRAIL_INTERVAL: 0.040,
         TRAIL:  { LIFE: 0.2, SIZE: 5, ALPHA: 0.25 },
-        WINDUP: { LIFE: 0.07, LEN: 40, W: 3 },                 // v1.1 蓄力拉丝（回滚目标更正为 v1.1，作废声明见 fx.md v2.1 节）
-        BAND:   { LIFE: 0.12, LEN: 168, W: 6 },                // v1.1 冲撞光带
-        SPARK:  { N: 6, SPEED: 260, LIFE: 0.12, SIZE: 2 },     // v1.1 撞击点星芒
+        /* I-40 更正（用户 09:4x 指令）：攻击特效 = v1.0 特效风格——
+         * 冲撞残影 3 段（间隔 25ms，alpha 0.5/0.35/0.2，寿命 250ms）+ 起手径向速度线 2 帧；
+         * v1.1 系列攻击特效均不采用（fx.md v2.1 节【作废声明】同步成立） */
+        AFTERIMAGE: { N: 3, GAP: 0.025, LIFE: 0.25,
+                      ALPHAS: [0.5, 0.35, 0.2] },          // 冲撞残影：沿冲撞方向 3 段
+        SPEEDLINES: { LIFE: 2 / 60, N: 10, LEN: 46 },      // 起手径向速度线（2 帧）
         BURST:  { N_MIN: 14, N_JITTER: 5, SPEED_MIN: 200, SPEED_JITTER: 300,
                   LIFE: 0.5, SIZE_MIN: 3, SIZE_JITTER: 3,
                   RING: { LIFE: 0.25, R0: 0, R1: 90 } },       // 死亡爆裂+冲击环（全保留）
@@ -861,7 +821,8 @@ class FXSystem {
     this.freeList = [];               // 索引栈
     for (let i = CONFIG.FX.POOL - 1; i >= 0; i--) this.freeList.push(i);
     this.queue = [];                  // 逻辑期只入队，帧末 flush（控制 #2）
-    this.streaks = [];                // v1.1 蓄力拉丝 / 冲撞光带：路径绘制，非粒子
+    this.afterimages = [];            // I-40：冲撞残影（v1.0 特效风格语言：球体轮廓快照）
+    this.speedlines = [];             // I-40：起手径向速度线（2 帧消散）
     this.rings = [];                  // 冲击环（r0→r1）：死亡爆裂 / 格挡眩晕 / 对撞弹开
     this.halos = [];                  // guard_halo：常驻附着光圈（不走粒子池，fx.md §6.5）
     this.shake = 0;                   // 屏幕震动幅度（仅渲染层偏移，不回写世界坐标）
@@ -891,19 +852,25 @@ class FXSystem {
       case 'trail':
         this._spawn(ev.x, ev.y, 0, 0, FX.TRAIL.LIFE, FX.TRAIL.SIZE, CONFIG.COLOR.PLAYER, 'trail');
         break;
-      case 'charge_windup':            // v1.1 蓄力拉丝：沿方向 40px
-        this.streaks.push({ x: ev.x, y: ev.y, ang: ev.ang,
-                            life: FX.WINDUP.LIFE, maxLife: FX.WINDUP.LIFE,
-                            len: FX.WINDUP.LEN, w: FX.WINDUP.W });
+      case 'charge_afterimages': {     // I-40：冲撞残影 3 段（沿冲撞方向 25ms 间隔，寿命 250ms）
+        const A = FX.AFTERIMAGE;
+        const step = CONFIG.CHARGE.DASH_SPEED * A.GAP;   // 42px/段（1680×0.025）
+        for (let k = 0; k < A.N; k++) {
+          this.afterimages.push({
+            x: ev.x + Math.cos(ev.ang) * step * k,
+            y: ev.y + Math.sin(ev.ang) * step * k,
+            r: ev.r, color: ev.color,
+            life: A.LIFE, maxLife: A.LIFE, alpha: A.ALPHAS[k],
+          });
+        }
         break;
-      case 'charge_band': {            // v1.1 冲撞光带 168px + 撞击点星芒
-        this.streaks.push({ x: ev.x, y: ev.y, ang: ev.ang,
-                            life: FX.BAND.LIFE, maxLife: FX.BAND.LIFE,
-                            len: FX.BAND.LEN, w: FX.BAND.W });
-        for (let k = 0; k < FX.SPARK.N; k++) {
-          const a = r() * Math.PI * 2;
-          this._spawn(ev.x, ev.y, Math.cos(a) * FX.SPARK.SPEED, Math.sin(a) * FX.SPARK.SPEED,
-                      FX.SPARK.LIFE, FX.SPARK.SIZE, '#fff', 'dot');
+      }
+      case 'charge_speedlines': {      // I-40：起手径向速度线（自球心向外放射，2 帧消散）
+        const S = FX.SPEEDLINES;
+        for (let k = 0; k < S.N; k++) {
+          const a = (k / S.N) * Math.PI * 2 + ev.ang;
+          this.speedlines.push({ x: ev.x, y: ev.y, ang: a,
+                                 life: S.LIFE, maxLife: S.LIFE, len: S.LEN });
         }
         break;
       }
@@ -986,9 +953,13 @@ class FXSystem {
       if (p.life <= 0) { p.alive = false; if (p.kind === 'ambient') this.ambientAlive--; continue; }
       p.x += p.vx * dt; p.y += p.vy * dt;
     }
-    for (let i = this.streaks.length - 1; i >= 0; i--) {
-      this.streaks[i].life -= dt;
-      if (this.streaks[i].life <= 0) this.streaks.splice(i, 1);
+    for (let i = this.afterimages.length - 1; i >= 0; i--) {
+      this.afterimages[i].life -= dt;
+      if (this.afterimages[i].life <= 0) this.afterimages.splice(i, 1);
+    }
+    for (let i = this.speedlines.length - 1; i >= 0; i--) {
+      this.speedlines[i].life -= dt;
+      if (this.speedlines[i].life <= 0) this.speedlines.splice(i, 1);
     }
     for (let i = this.rings.length - 1; i >= 0; i--) {
       this.rings[i].life -= dt;
@@ -1010,15 +981,23 @@ class FXSystem {
       ctx.arc(p.x, p.y, p.size * (p.kind === 'ghost' ? 1 : p.life / p.maxLife + 0.3), 0, Math.PI * 2);
       ctx.fill();
     }
-    // v1.1 蓄力拉丝 / 冲撞光带：沿方向的渐隐光条
-    for (const s of this.streaks) {
-      const k = s.life / s.maxLife;
-      ctx.globalAlpha = k;
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = s.w;
+    // I-40 冲撞残影：球体轮廓快照，alpha 0.5/0.35/0.2 → 250ms 内整体渐隐
+    for (const a of this.afterimages) {
+      ctx.globalAlpha = a.alpha * (a.life / a.maxLife);
+      ctx.fillStyle = a.color;
       ctx.beginPath();
-      ctx.moveTo(s.x, s.y);
-      ctx.lineTo(s.x + Math.cos(s.ang) * s.len, s.y + Math.sin(s.ang) * s.len);
+      ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // I-40 起手速度线：自球心向外放射的短亮线，2 帧内渐隐
+    for (const l of this.speedlines) {
+      const k = l.life / l.maxLife;
+      ctx.globalAlpha = k * 0.8;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(l.x + Math.cos(l.ang) * 18, l.y + Math.sin(l.ang) * 18);
+      ctx.lineTo(l.x + Math.cos(l.ang) * (18 + l.len), l.y + Math.sin(l.ang) * (18 + l.len));
       ctx.stroke();
     }
     // 冲击环 r0→r1（死亡爆裂 / 格挡眩晕 / 对撞弹开共用通道）
@@ -1052,7 +1031,11 @@ class FXSystem {
 class AudioBus {
   constructor() { this.ctx = null; }
   init() {                             // 必须在首次 pointerdown 后调用（控制 #7）
-    if (this.ctx) return;
+    if (this.ctx) {
+      /* v3.0 iOS：切后台/锁屏后 ctx 变 suspended，touchend 解锁通道每次尝试 resume */
+      if (this.ctx.state === 'suspended' && this.ctx.resume) this.ctx.resume();
+      return;
+    }
     try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
     catch (e) { this.ctx = null; }
   }
@@ -1169,11 +1152,10 @@ function seedOnLevelWin(store, levelN, winReplay) {
   return false;
 }
 
-/* 灰显判定（menu.md v3.0 §A：新六项 IA；单机boss 池空灰，其余永远可用；
- * 联机对战永远可点——进大厅屏，连接动作提示需 server.js 二期） */
+/* 灰显判定（menu.md v3.0：五项 IA——AI 菜单项随用户指令删除，OrbAI 保留为控制台 API；
+ * 联机对战可点进入骨架屏（配对联机开发中）；单机boss 池空灰） */
 function isModeAvailable(mode, store) {
-  if (mode === 'solo' || mode === 'self' || mode === 'online' ||
-      mode === 'ai' || mode === 'quit') return true;
+  if (mode === 'solo' || mode === 'self' || mode === 'online' || mode === 'quit') return true;
   if (mode === 'boss_solo') return store.list('boss_solo').length > 0;
   return false;
 }
@@ -1287,6 +1269,88 @@ class LocalGhostStore {
   persist(mode) { this._save(mode); }   // Progression 直改内存计数后落盘
 }
 
+
+/* ============================================================
+ * §9.5 OrbAI —— AI 输入管道（ADR-009：AI 输入与人类同通路）
+ * ai-interface.md v3.0：AIInput implements Input 同接口；think() 决策
+ * 消费冻结快照（Match.snapshotView），异常降级空输入不判负。
+ * ============================================================ */
+/* ---------- AIInput：每 tick 首先被 beginTick 喂入世界快照，决策缓存供本帧消费 ---------- */
+class AIInput {
+  /* impl: {name, think(state)}；seat: 'P1'|'P2'（快照视角） */
+  constructor(impl, seat) {
+    this.impl = impl; this.seat = seat;
+    this._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+    this._clickConsumed = false;
+  }
+  /* Match.update 顶部调用（逻辑更新前 = 上一帧末世界状态；本 tick 输入消费前就绪） */
+  beginTick(match) {
+    this._clickConsumed = false;
+    try {
+      const snap = match.snapshotView(this.seat);
+      const d = this.impl.think(snap);
+      this._dec = {
+        move: d && d.move ? { x: d.move.x || 0, y: d.move.y || 0 } : { x: 0, y: 0 },
+        click0: !!(d && d.click0),
+        guardHeld: !!(d && d.guardHeld),
+      };
+    } catch (err) {
+      /* ADR-009：AI 异常 = 空输入 + 控制台告警，不判负不崩局 */
+      console.warn('[OrbAI] ' + (this.impl.name || 'ai') + ' think() 异常，本帧空输入：', err);
+      this._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+    }
+  }
+  getMoveAxis() { return this._dec.move; }
+  /* 冲撞方向 = move 决策向量（AI 的移动即意图）；零向量交给 Player 层「朝对手」兜底 */
+  getChargeDir() {
+    const m = this._dec.move;
+    if (m.x !== 0 || m.y !== 0) return norm(m.x, m.y);
+    return { x: 0, y: 0 };
+  }
+  consumeClick(btn) {                   // click0 一次消费（同帧重复请求无效）
+    if (btn !== 0) return false;
+    if (this._clickConsumed) return false;
+    this._clickConsumed = true;
+    return this._dec.click0;
+  }
+  guardHeld() { return this._dec.guardHeld; }
+  isDown() { return false; }            // AI 无按键语义（KeyR 等仅人类）
+  endFrame() {}                         // no-op（click0 生命周期由 beginTick 重置）
+}
+
+/* ---------- 内置示例 AI：追踪 + 距离<220 且对手非无敌时冲撞；对手起手 30% 概率举盾 500ms ---------- */
+function createBuiltinAI() {
+  let guardUntil = 0;
+  return {
+    name: '内置示例',
+    think(state) {
+      const dx = state.opp.x - state.self.x, dy = state.opp.y - state.self.y;
+      const dist = Math.hypot(dx, dy);
+      const move = dist > 1 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+      const oppVulnerable = state.opp.phase === 'IDLE' || state.opp.phase === 'CHARGE_ACTIVE';
+      const click0 = dist < 220 && oppVulnerable;
+      if (state.opp.phase === 'CHARGE_WINDUP' && Math.random() < 0.3) {
+        guardUntil = state.tick + 30;             // 500ms ≈ 30 tick
+      }
+      const guardHeld = state.tick < guardUntil;
+      return { move, click0, guardHeld };
+    },
+  };
+}
+
+/* ---------- 用户 AI 代码编译：new Function 包装 + think 校验（window.OrbAI 'code' spec 用） ---------- */
+function compileAICode(code) {
+  let obj;
+  try {
+    obj = new Function('return (' + code + ')')();
+  } catch (err) {
+    throw new Error('AI 代码语法错误：' + err.message);
+  }
+  if (!obj || typeof obj.think !== 'function') {
+    throw new Error('AI 代码必须提供 think(state) 函数');
+  }
+  return obj;
+}
 
 /* ============================================================
  * §10 Match —— 对局（原 Game 对局部分降级，由 GameScreen 持有；
@@ -1502,10 +1566,11 @@ class Match {
     const trans = (ent, prev, color) => {
       const cur = ent.combat.phase;
       if (prev !== 'CHARGE_WINDUP' && cur === 'CHARGE_WINDUP') {
-        this.fx.queue.push({ type: 'charge_windup', x: ent.x, y: ent.y, ang: ent.facing });
+        this.fx.queue.push({ type: 'charge_speedlines', x: ent.x, y: ent.y, ang: ent.facing });   // I-40 起手速度线
       }
       if (prev !== 'CHARGE_ACTIVE' && cur === 'CHARGE_ACTIVE') {
-        this.fx.queue.push({ type: 'charge_band', x: ent.x, y: ent.y, ang: ent.facing });   // v1.1 光带+星芒
+        this.fx.queue.push({ type: 'charge_afterimages', x: ent.x, y: ent.y, ang: ent.facing,
+                             r: ent.r, color });   // I-40 冲撞残影 3 段（v1.0 特效风格）
       }
       if (prev !== 'BOUNCE' && cur === 'BOUNCE') {
         this.fx.queue.push({ type: 'bounce_stun', x: ent.x, y: ent.y });
@@ -1644,9 +1709,9 @@ class Match {
       }),
       arena: deepFreeze({
         W: CONFIG.VIEW.W, H: CONFIG.VIEW.H,
-        BALL_R: CONFIG.PLAYER.R, HIT_R: CONFIG.HIT.R,
-        HIT_OFFSET: CONFIG.HIT.OFFSET,
-        CHARGE_DISTANCE: CONFIG.CHARGE.SPEED * CONFIG.CHARGE.ACTIVE / 1000,   // 168px
+        BALL_R: CONFIG.BALL.R, HIT_R: CONFIG.CHARGE.HIT_R,
+        HIT_OFFSET: CONFIG.CHARGE.HIT_OFFSET,
+        CHARGE_DISTANCE: CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000,   // 168px
       }),
     });
   }
@@ -1722,23 +1787,12 @@ class Match {
       y += (Math.random() - 0.5) * 4;
       flash = flash || Math.floor(b.combat.t / (CONFIG.BOUNCE.DURATION / 6)) % 2 === 0;  // 白↔本体色 3 次/400ms
     }
-    // 起手收缩至 85% + 蓄力描边（v1.1 保留）+ 冲撞判定帧 squash/stretch（v1.1 样貌恢复；
-    // 沿冲撞方向拉伸 1.12/0.88、CLASH 弹开挤压 0.85/1.15，方向感强化——参数工程自定，GDD 无数值）
-    let sx = 1, sy = 1, rot = 0;
+    // 起手收缩至 85% + 蓄力描边（I-31 验收通过的保留项）
     if (b.combat && b.combat.phase === 'CHARGE_WINDUP') {
       r = b.r * 0.85;
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, b.r + 4, 0, Math.PI * 2); ctx.stroke();
-    }
-    if (b.combat && b.combat.phase === 'CHARGE_ACTIVE') {
-      rot = b.combat.owner.facing; sx = 1.12; sy = 0.88;
-    } else if (b.combat && b.combat.phase === 'CLASH') {
-      rot = b.combat.owner.facing; sx = 0.85; sy = 1.15;
-    }
-    if (sx !== 1 || sy !== 1) {
-      ctx.translate(x, y); ctx.rotate(rot); ctx.scale(sx, sy);
-      ctx.translate(-x, -y); ctx.rotate(-rot);
     }
     ctx.shadowColor = color;
     ctx.shadowBlur = 18;
@@ -1906,12 +1960,17 @@ class MenuScreen extends Screen {
   onEsc() { return true; }              // 主菜单 ESC 不动作
 }
 
-/* ---------- boss 二级菜单 ---------- */
-class BossMenuScreen extends Screen {
+/* ---------- v3.0 联机屏（本期仅骨架：连接按钮置灰 + 「配对联机开发中」；
+ * LAN/WebRTC 实体等 E-41 架构补丁到达后另行派发） ---------- */
+class OnlineScreen extends Screen {
   get ambient() { return true; }
-  enter() { this.app.showScreen('scr-boss'); this.app.refreshBossMenu(); }
-  exit() { this.app.hideScreen('scr-boss'); }
-  onEsc() { this.app.stack.replace(new MenuScreen(this.app)); return true; }  // 逐级返回
+  enter() { this.app.showScreen('scr-online'); }
+  exit() { this.app.hideScreen('scr-online'); }
+  onOlAction(act) {
+    if (act === 'back') { this.app.stack.replace(new MenuScreen(this.app)); return; }
+    this.app.toast('配对联机开发中（E-41 架构补丁后上线）', 4000);
+  }
+  onEsc() { this.app.stack.replace(new MenuScreen(this.app)); return true; }
 }
 
 /* ---------- 对局屏（持 Match + HUD + ESC 放弃确认） ---------- */
@@ -1921,13 +1980,31 @@ class GameScreen extends Screen {
   enter() {
     this._start();
     this.app.setHud(this._hudLines());
+    /* v3.0：GAME 屏显示触屏控件层（mobile.md §4；非触屏设备 setTouchUI 仅置状态） */
+    if ('ontouchstart' in window) this.app.setTouchUI(true);
   }
-  exit() { this.app.setHud([]); }
+  exit() {
+    this.app.setHud([]);
+    this.app.setTouchUI(false);
+  }
   _entry() {
     if (this.cfg.mode !== 'self' && this.cfg.mode !== 'boss_solo') return null;
     return this.app.store.list(this.cfg.mode)[(this.cfg.level || 1) - 1] || null;
   }
   _start() {
+    /* v3.0 demo 对局（人机 / AI-vs-AI / window.OrbAI 外部驱动）：双输入源注入（ADR-009） */
+    if (this.cfg.mode === 'demo') {
+      const p1Input = this._mkInput(this.cfg.p1, 'P1') || this.app.input;
+      const p2Input = this._mkInput(this.cfg.p2, 'P2') || p1Input;
+      this.match = new Match(
+        { input: this.app.input, fx: this.app.fx, audio: this.app.audio },
+        {
+          mode: 'demo',
+          p1Input, p2Input,
+          onEnd: (seat) => this._onEndDemo(seat),
+        });
+      return;
+    }
     const entry = this._entry();
     this.match = new Match(
       { input: this.app.input, fx: this.app.fx, audio: this.app.audio },
@@ -1940,6 +2017,41 @@ class GameScreen extends Screen {
         onLevelWin: (levelN, winReplay) => this._onLevelWin(levelN, winReplay),
       });
   }
+  /* spec: {kind:'human'} | {kind:'builtin'} | {kind:'code', name, code} → Input 源或 null(人类) */
+  _mkInput(spec, seat) {
+    if (!spec || spec.kind === 'human') return null;
+    try {
+      if (spec.kind === 'builtin') return new AIInput(createBuiltinAI(), seat);
+      if (spec.kind === 'code') return new AIInput(compileAICode(spec.code), seat);
+    } catch (err) {
+      this.app.toast('AI 无效：' + err.message, 4000);
+      return null;                      // 降级人类输入，不阻断进屏
+    }
+    return null;
+  }
+  /* demo 收束：seat = 'P1'|'P2'|null(超时平局)。分发 window.OrbAI 回调 + 结算屏 */
+  _onEndDemo(seat) {
+    const app = this.app;
+    if (this.cfg.matchId != null && window.OrbAI) {
+      window.OrbAI._dispatch(this.cfg.matchId, {
+        winner: seat,
+        hp: this.match ? {
+          p1: this.match.player ? this.match.player.combat.hp : 0,
+          p2: this.match.p2 ? this.match.p2.combat.hp : 0,
+        } : null,
+        duration: this.match ? this.match.matchTime : 0,
+      });
+    }
+    const title = seat == null ? '平局' : (seat === 'P1' ? 'P1 获胜' : 'P2 获胜');
+    app.stack.replace(new ResultScreen(app, {
+      title,
+      lines: ['用时 ' + (this.match ? this.match.matchTime.toFixed(1) : '0') + ' 秒'],
+      btns: [
+        { label: '再来一局', act: () => app.stack.replace(new GameScreen(app, this.cfg)) },
+        { label: '返回菜单', act: () => app.stack.replace(new MenuScreen(app)) },
+      ],
+    }));
+  }
   _onLevelWin(levelN, winReplay) {
     if (this.cfg.mode !== 'solo') return;
     seedOnLevelWin(this.app.store, levelN, winReplay);   // v2.1 播种收窄：仅第 2 关
@@ -1951,6 +2063,7 @@ class GameScreen extends Screen {
   }
   update(dt) {
     if (this.confirming) return;        // 确认框打开：对局冻结
+    if (this.app.portrait) return;      // v3.0 手机竖屏：遮罩期间对局暂停（mobile.md §5）
     if (this.match && !this.match.ended) this.match.update(dt);
   }
   renderGame(ctx) { if (this.match) this.match.render(ctx); }
@@ -2058,12 +2171,15 @@ class App {
     this.input = new Input(canvas);
     this.fx = new FXSystem();
     this.audio = new AudioBus();
-    this.store = new LocalGhostStore();      // 二期注入 RemoteGhostStore（ADR-006 接缝）
+    this.store = new LocalGhostStore();      // v3.0：本地池（联机 PVP 直连对局，无幽灵池）
     this.stack = new ScreenStack(this);
     this.confirmOpen = false;
+    this.portrait = false;                   // v3.0 手机竖屏态（遮罩 + 对局暂停）
 
     // 音频 lazy init：首次 pointerdown（控制 #7）
     window.addEventListener('pointerdown', () => this.audio.init(), { once: false });
+    // v3.0 iOS 音频解锁：touchend 后 ctx 若 suspended 则 resume（mobile.md §6）
+    window.addEventListener('touchend', () => this.audio.init(), { once: false });
     // 失焦恢复：timeScale 状态复位（fx.md §6.3）
     window.addEventListener('focus', () => {});
     // ESC 逐级返回（menu.md §4.5）
@@ -2083,8 +2199,85 @@ class App {
     window.addEventListener('resize', fit);
     fit();
 
+    /* v3.0 手机适配（ADR-010 / mobile.md §5）：
+     * 竖屏遮罩 + GAME 屏暂停；触屏控件事件喂给 Input.touch（TouchSource 纯逻辑） */
+    const mask = document.getElementById('portrait-mask');
+    const applyOrient = () => {
+      this.portrait = window.innerHeight > window.innerWidth;
+      mask.classList.toggle('on', this.portrait);
+    };
+    if (window.matchMedia) {
+      const mq = window.matchMedia('(orientation: portrait)');
+      if (mq.addEventListener) mq.addEventListener('change', applyOrient);
+      else if (mq.addListener) mq.addListener(applyOrient);
+    }
+    window.addEventListener('resize', applyOrient);
+    applyOrient();
+
+    if ('ontouchstart' in window) {          // 仅触屏设备绑定（桌面零开销）
+      const touch = this.input.touch;
+      const toLocal = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (e.clientX - rect.left) / rect.width * CONFIG.VIEW.W,
+          y: (e.clientY - rect.top) / rect.height * CONFIG.VIEW.H,
+        };
+      };
+      canvas.addEventListener('pointerdown', (e) => {
+        const p = toLocal(e);
+        touch.pointerDown(e.pointerId, p.x, p.y);
+      });
+      window.addEventListener('pointermove', (e) => {
+        const p = toLocal(e);
+        touch.pointerMove(e.pointerId, p.x, p.y);
+        this._syncTouchDom();
+      });
+      window.addEventListener('pointerup', (e) => {
+        touch.pointerUp(e.pointerId);
+        this._syncTouchDom();
+      });
+      window.addEventListener('pointercancel', (e) => {
+        touch.pointerUp(e.pointerId);
+        this._syncTouchDom();
+      });
+      this._touchDom = {
+        joyBase: document.getElementById('joy-base'),
+        joyKnob: document.getElementById('joy-knob'),
+        atk: document.getElementById('tbtn-atk'),
+        guard: document.getElementById('tbtn-guard'),
+      };
+    }
+
     this.stack.push(new TitleScreen(this));   // v2.1 开机屏：点击一次进 MENU，ESC 永不回 TITLE
     if (!this.store.persistent) this.toast('进度不会保存', 8000);   // menu.md §5.4
+  }
+
+  /* v3.0：触屏控件 DOM 同步（摇杆底座/摇杆头/按钮按下态；mobile.md §4 布局） */
+  _syncTouchDom() {
+    const d = this._touchDom, t = this.input.touch;
+    if (!d) return;
+    const j = t.joystick;
+    if (j.pointerId !== null) {
+      d.joyBase.style.display = 'block';
+      d.joyBase.style.left = (j.origin.x - j.r) + 'px';
+      d.joyBase.style.top = (j.origin.y - j.r) + 'px';
+      const off = j.knobOffset();
+      d.joyKnob.style.display = 'block';
+      d.joyKnob.style.left = (j.origin.x + off.x - 22) + 'px';
+      d.joyKnob.style.top = (j.origin.y + off.y - 22) + 'px';
+    } else {
+      d.joyBase.style.display = 'none';
+      d.joyKnob.style.display = 'none';
+    }
+    d.atk.classList.toggle('down', t.btnAtk.pressed);
+    d.guard.classList.toggle('down', t.btnGuard.pressed);
+  }
+
+  /* v3.0：触屏控件层显隐（GAME 屏才显示；mobile.md §4） */
+  setTouchUI(on) {
+    const el = document.getElementById('touchui');
+    if (el) el.classList.toggle('on', on);
+    this.input.touch.visible = on;
   }
 
   /* ---------- DOM 编排 ---------- */
@@ -2123,36 +2316,19 @@ class App {
       const act = el.dataset.act;
       const ok = isModeAvailable(act, this.store);
       el.classList.toggle('dis', !ok);
-      el.title = ok ? '' : (act === 'online' ? '暂未开放' : '暂无可用记录');
-    });
-  }
-  refreshBossMenu() {
-    this._el('scr-boss').querySelectorAll('.mi').forEach((el) => {
-      const mode = el.dataset.boss;
-      if (!mode) { el.title = ''; return; }
-      const ok = isModeAvailable(mode, this.store);
-      el.classList.toggle('dis', !ok);
-      el.title = ok ? '' : '暂未开放';
-      // 进度条文案（menu.md §4.2 原文；单机boss取顺位头条目计数，联机为静态占位）
-      let lines = [];
-      if (mode === 'boss_solo') {
-        const head = this.store.list('boss_solo')[0];
-        lines = hudLines('boss_solo', head ? head.counters : null);
-      } else if (mode === 'boss_online') {
-        lines = hudLines('boss_online', null);
-      } else if (mode === 'boss_final') {
-        lines = hudLines('boss_final', null);
-      }
-      el.querySelector('.prog').innerHTML = lines.map((l) => '<div>' + l + '</div>').join('');
+      el.title = ok ? '' : '暂无可用记录';
     });
   }
 
-  /* ---------- 菜单交互（事件在 bootstrap 绑定一次） ---------- */
+  /* ---------- 菜单交互（事件在 bootstrap 绑定一次；v3.0 六项 IA） ---------- */
   onMenuAction(act) {
     if (!isModeAvailable(act, this.store)) { this.toast('暂未开放'); return; }
     switch (act) {
       case 'solo':
         this.stack.replace(new GameScreen(this, { mode: 'solo' }));
+        break;
+      case 'online':                     // v3.0：联机骨架屏（配对联机开发中，E-41 后接入实体）
+        this.stack.replace(new OnlineScreen(this));
         break;
       case 'self': {
         if (this.store.list('self').length === 0) {
@@ -2165,8 +2341,8 @@ class App {
         }
         break;
       }
-      case 'boss':
-        this.stack.replace(new BossMenuScreen(this));
+      case 'boss_solo':                  // v3.0：单机boss 一级直达（二级屏删除）
+        this.stack.replace(new GameScreen(this, { mode: 'boss_solo', level: 1 }));
         break;
       case 'quit':
         this.showConfirm('确定退出游戏？', () => {
@@ -2178,10 +2354,6 @@ class App {
         break;
       default: break;
     }
-  }
-  onBossAction(mode) {
-    if (!isModeAvailable(mode, this.store)) { this.toast('暂未开放'); return; }
-    this.stack.replace(new GameScreen(this, { mode, level: 1 }));
   }
 
   /* ---------- 主循环 ---------- */
@@ -2229,11 +2401,12 @@ if (typeof document !== 'undefined') {
     const mi = e.target.closest('.mi');
     if (mi && !mi.classList.contains('dis')) app.onMenuAction(mi.dataset.act);
   });
-  document.getElementById('scr-boss').addEventListener('click', (e) => {
+  // v3.0 联机屏：创建/加入置灰仍可点 → 开发中提示；返回 → 菜单
+  document.getElementById('scr-online').addEventListener('click', (e) => {
     const mi = e.target.closest('.mi');
     if (!mi) return;
-    if (mi.dataset.act === 'back') { app.stack.replace(new MenuScreen(app)); return; }
-    if (mi.dataset.boss && !mi.classList.contains('dis')) app.onBossAction(mi.dataset.boss);
+    const s = app.stack.current;
+    if (s && s.onOlAction) s.onOlAction(mi.dataset.ol);
   });
   document.getElementById('confirm-yes').addEventListener('click', () => app.hideConfirm(true));
   document.getElementById('confirm-no').addEventListener('click', () => app.hideConfirm(false));
@@ -2242,6 +2415,39 @@ if (typeof document !== 'undefined') {
     const s = app.stack.current;
     if (s && s.onClick) s.onClick();
   });
+
+  /* ---------- v3.0 window.OrbAI：纯控制台 API（无游戏内 UI，打开 DevTools 即可用） ----------
+   * OrbAI.startMatch(opts) → matchId；opts = { p1?, p2?, onEnd?(info) }
+   *   p1/p2: {kind:'builtin'} | {kind:'code', code} | {kind:'human'}（缺省 = P1 human / P2 builtin）
+   *   onEnd info = { winner:'P1'|'P2'|null, hp:{p1,p2}, duration:秒 }
+   * OrbAI.stopMatch(matchId)：中止对局回菜单并注销回调 */
+  window.OrbAI = {
+    _next: 1,
+    _cbs: new Map(),
+    startMatch(opts = {}) {
+      const id = this._next++;
+      const p1 = opts.p1 || { kind: 'human' };
+      const p2 = opts.p2 || { kind: 'builtin' };
+      if (typeof opts.onEnd === 'function') this._cbs.set(id, opts.onEnd);
+      app.stack.replace(new GameScreen(app, { mode: 'demo', p1, p2, matchId: id }));
+      return id;
+    },
+    stopMatch(matchId) {
+      const s = app.stack.current;
+      if (s instanceof GameScreen && s.cfg.mode === 'demo' && s.cfg.matchId === matchId) {
+        if (s.match && !s.match.ended) s.match.abandon();
+        app.stack.replace(new MenuScreen(app));
+      }
+      this._cbs.delete(matchId);
+    },
+    /* GameScreen._onEndDemo 分发通道（info = {winner, hp, duration}） */
+    _dispatch(matchId, info) {
+      const cb = this._cbs.get(matchId);
+      this._cbs.delete(matchId);
+      if (cb) cb(info);
+    },
+  };
+
   app.start();
 } else if (typeof globalThis !== 'undefined') {
   globalThis.__EXPORTS__ = { CONFIG, Combat, CombatState, Recorder, GhostPlayer,
@@ -2249,8 +2455,11 @@ if (typeof document !== 'undefined') {
                              resolveOverlap, Input, FXSystem, Match, TitleScreen,
                              serializeReplay, deserializeReplay, LocalGhostStore,
                              onSelfWin, onSelfLose, onBossSoloWin, onBossSoloLose,
-                             selfOutcome, bossSoloOutcome, isModeAvailable, hudLines, seedRemote,
-                             seedOnLevelWin };
+                             selfOutcome, bossSoloOutcome, isModeAvailable, hudLines,
+                             seedOnLevelWin,
+                             /* v3.0：OrbAI 管道（纯控制台 API）+ 触屏纯逻辑（selftest T14/T16） */
+                             AIInput, createBuiltinAI, compileAICode, deepFreeze,
+                             VirtualJoystick, TouchButton, TouchSource };
 }
 
 })();

@@ -31,7 +31,9 @@ const { CONFIG, Combat, CombatState, Recorder, GhostPlayer, Player, Dummy,
         checkChargeHit, hitCircleOf, adjudicate, resolveOverlap, Input, FXSystem, Match,
         serializeReplay, deserializeReplay, LocalGhostStore,
         onSelfWin, onSelfLose, onBossSoloWin, onBossSoloLose,
-        selfOutcome, bossSoloOutcome, isModeAvailable, hudLines, seedOnLevelWin } = E;
+        selfOutcome, bossSoloOutcome, isModeAvailable, hudLines, seedOnLevelWin,
+        AIInput, createBuiltinAI, compileAICode,
+        deepFreeze, VirtualJoystick, TouchButton, TouchSource } = E;
 
 let pass = 0, fail = 0;
 function ok(cond, name) {
@@ -48,16 +50,24 @@ const mkBall = (x, y, facing) => {
   return b;
 };
 
-/* ---------- T0 删净断言（控制 #13：源码扫描，v2.1 回滚项并入） ---------- */
-console.log('[T0] 删净扫描：v1.0 闪避 + v2.1 回滚项（拉丝/光带/星芒/形变）+ v2.3 废除防抖');
+/* ---------- T0 删净断言（控制 #13：源码扫描；I-40 更正：攻击特效 = v1.0 闪避风格残影+速度线） ---------- */
+console.log('[T0] 删净扫描：闪避词 + 拉丝/光带/星芒/月牙/形变删净 + 死代码删净；残影+速度线存在');
 {
   const html = fs.readFileSync(HTML, 'utf8');
   ok(html.match(/dodge|闪避|graze|擦弹/gi) === null, '全文无 dodge/闪避/graze/擦弹（v1.1 T0 不回退）');
-  ok(/streaks|'charge_windup'|"charge_windup"|'charge_band'|"charge_band"|FX\.SPARK|FX\.BAND|squash|stretch/.test(html) === false,
-     '无拉丝/冲撞光带/星芒/球体形变残留（v2.1 回滚）');
+  ok(/crescent|月牙|FX\.WINDUP|FX\.BAND|FX\.SPARK|'charge_windup'|'charge_band'|streaks|squash|stretch/g.test(html) === false,
+     'I-40 更正：拉丝/光带/星芒/月牙/球体形变全部删净（残影+速度线取代）');
   ok(/RELEASE_DEBOUNCE|guardReady|debounceTimer/.test(html) === false,
      'v2.3：200ms 防抖通道废除干净');
-  ok(/SHAKE\.COLLIDE/.test(html) === false, '10px 对撞重震已删（对撞改弹开通道）');
+  ok(/\bnew RemoteGhostStore\b|\bfunction seedRemote\b|\bid="scr-boss"|\bclass BossMenuScreen\b|\bid="scr-ai"|\bclass AiScreen\b|\bAISlotStore\b|\bBUILTIN_AI_SAMPLE\b/.test(html) === false,
+     'v3.0：联机三池/RemoteGhostStore/二级boss屏/AI 编辑屏死代码删净（代码级扫描）');
+  // —— 残影 + 速度线存在性（I-40 更正后的攻击特效语言）——
+  ok(/AFTERIMAGE:\s*\{\s*N:\s*3,\s*GAP:\s*0\.025,\s*LIFE:\s*0\.25/.test(html) &&
+     /ALPHAS:\s*\[\s*0\.5,\s*0\.35,\s*0\.2\s*\]/.test(html),
+     '残影参数：3 段 / 25ms 间隔 / 250ms 寿命 / alpha 0.5/0.35/0.2');
+  ok(/SPEEDLINES:\s*\{\s*LIFE:\s*2\s*\/\s*60/.test(html), '速度线：2 帧寿命');
+  ok(/'charge_afterimages'/.test(html) && /'charge_speedlines'/.test(html),
+     'fxHooks 发射残影 + 速度线事件');
 }
 
 /* ---------- T1 Recorder → GhostPlayer 镜像回放（v2.3 水平镜像复刻） ---------- */
@@ -581,13 +591,16 @@ console.log('[T10] onBossSoloWin 20 胜删除 + 顺位前移 + 池空');
 }
 
 /* ---------- T11 灰显 + HUD 文案 + v2.2 血条常量 ---------- */
-console.log('[T11] isModeAvailable + hudLines 逐字 + HPBAR 布局常量');
+console.log('[T11] isModeAvailable（v3.0 六项 IA）+ hudLines 逐字 + HPBAR 布局常量');
 {
   const store = new LocalGhostStore();
   ok(isModeAvailable('solo', store) && isModeAvailable('self', store) &&
-     isModeAvailable('boss', store) && isModeAvailable('quit', store), 'solo/self/boss/quit 常亮');
-  ok(!isModeAvailable('online', store) && !isModeAvailable('boss_online', store) &&
-     !isModeAvailable('boss_final', store), '联机三项永久灰显');
+     isModeAvailable('quit', store), 'solo/self/quit 常亮');
+  ok(isModeAvailable('online', store), 'v3.0：联机常亮（进骨架屏，配对联机开发中）');
+  ok(!isModeAvailable('ai', store), 'AI 菜单项已随用户指令删除（isModeAvailable 返回 false）');
+  ok(!isModeAvailable('boss', store) && !isModeAvailable('boss_online', store) &&
+     !isModeAvailable('boss_final', store),
+     'v3.0：旧 boss 二级入口与联机三池 act 已失效（返回 false）');
   ok(!isModeAvailable('boss_solo', store), 'boss_solo 空池灰显');
   ok(JSON.stringify(hudLines('self', { defeatedPlayers: 5 })) ===
      JSON.stringify(['已打败玩家数：5/20']), 'self HUD 逐字');
@@ -607,8 +620,15 @@ console.log('[T11] isModeAvailable + hudLines 逐字 + HPBAR 布局常量');
   ok(CONFIG.HP.MAX === 3 && CONFIG.CLASH.DURATION === 0.300 &&
      CONFIG.CLASH.KNOCKBACK === 60 && CONFIG.CLASH.KNOCKBACK_DUR === 0.150,
      'v2.2 数值：maxHP=3 / 弹开 300ms / 击退 60px/150ms');
-  ok(CONFIG.FX.CRESCENT.R === 60 && CONFIG.FX.CRESCENT.LIFE === 0.120,
-     'v2.1 月牙光刃参数：60px / 120ms');
+  // I-40 更正后 FX 参数（v1.0 闪避风格：残影 + 速度线）
+  ok(CONFIG.FX.AFTERIMAGE.N === 3 && CONFIG.FX.AFTERIMAGE.GAP === 0.025 &&
+     CONFIG.FX.AFTERIMAGE.LIFE === 0.25 &&
+     JSON.stringify(CONFIG.FX.AFTERIMAGE.ALPHAS) === JSON.stringify([0.5, 0.35, 0.2]),
+     '残影：3 段 / 25ms 间隔 / 250ms / alpha 0.5/0.35/0.2');
+  ok(Math.abs(CONFIG.FX.SPEEDLINES.LIFE - 2 / 60) < 1e-9, '速度线：2 帧寿命');
+  ok(CONFIG.FX.WINDUP === undefined && CONFIG.FX.BAND === undefined &&
+     CONFIG.FX.SPARK === undefined && CONFIG.FX.CRESCENT === undefined,
+     'v1.1 FX 参数组已从 CONFIG 删除');
   ok(CONFIG.HIT.FLASH === 0.080 && CONFIG.HIT.SHAKE === 3 && CONFIG.HIT.LOW_PULSE === 0.600,
      'v2.2 受击反馈：白闪 80ms / 微震 3px / 低血脉动 600ms');
   ok(CONFIG.GUARD.MAX_HOLD === 3.0 && CONFIG.GUARD.BLOCK_COOLDOWN === 3.0,
@@ -762,22 +782,341 @@ console.log('[T12] Match 集成（solo 无限链 / self 败局 / 对撞弹开 / 
   }
 }
 
-/* ---------- T13 特效回滚运行时断言（v2.1） ---------- */
-console.log('[T13] FX 回滚运行时：月牙光刃入场 / 弹开双环 / 无光带星芒入队');
+/* ---------- T13 攻击特效运行时断言（I-40 更正：v1.0 闪避风格残影 + 速度线） ---------- */
+console.log('[T13] FX 运行时：冲撞残影 3 段 / 起手速度线 / 对撞双环 / 无拉丝光带星芒月牙');
 {
   const fx = new FXSystem();
-  fx.queue.push({ type: 'charge_crescent', owner: {}, x: 100, y: 100, ang: 0 });
-  fx.queue.push({ type: 'clash_ring', x: 200, y: 200 });
-  fx.queue.push({ type: 'clash_ring', x: 240, y: 200 });
+  fx.queue.push({ type: 'charge_speedlines', x: 100, y: 100, ang: 0 });
+  fx.queue.push({ type: 'charge_afterimages', x: 200, y: 100, ang: 0, r: 16, color: '#ffe9c4' });
+  fx.queue.push({ type: 'clash_ring', x: 300, y: 200 });
+  fx.queue.push({ type: 'clash_ring', x: 340, y: 200 });
   fx.flush();
-  ok(fx.crescents.length === 1 && Math.abs(fx.crescents[0].maxLife - 0.120) < 1e-9,
-     '月牙光刃 120ms 入场');
+  ok(fx.speedlines.length === CONFIG.FX.SPEEDLINES.N, '起手速度线 ' + CONFIG.FX.SPEEDLINES.N + ' 条入队');
+  ok(Math.abs(fx.speedlines[0].maxLife - 2 / 60) < 1e-9, '速度线寿命 2 帧');
+  ok(fx.afterimages.length === 3, '冲撞残影 3 段入队');
+  ok(Math.abs(fx.afterimages[0].maxLife - 0.25) < 1e-9, '残影寿命 250ms');
+  ok(fx.afterimages[0].alpha === 0.5 && fx.afterimages[1].alpha === 0.35 &&
+     fx.afterimages[2].alpha === 0.2, '残影透明度 0.5/0.35/0.2');
+  const step = CONFIG.CHARGE.DASH_SPEED * CONFIG.FX.AFTERIMAGE.GAP;   // 42px/段
+  ok(Math.abs(fx.afterimages[1].x - (200 + step)) < 1e-9 &&
+     Math.abs(fx.afterimages[2].x - (200 + step * 2)) < 1e-9 &&
+     fx.afterimages[1].y === 100,
+     '残影沿冲撞方向 42px/段排布（1680×0.025）');
   ok(fx.rings.length === 2 && Math.abs(fx.rings[0].r1 - 40) < 1e-9 &&
      Math.abs(fx.rings[0].maxLife - 0.200) < 1e-9, '对撞弹开双环 r0→40px 200ms');
-  const owner = fx.crescents[0].owner;
-  fx.queue.push({ type: 'crescent_fade', owner });
-  fx.flush();
-  ok(fx.crescents[0].life <= CONFIG.FX.CRESCENT.FADE_LIFE, '无效命中 → 光刃消散（40ms）');
+  // 残影整体渐隐 + 250ms 消退
+  fx.update(0.125);
+  ok(fx.afterimages.length === 3 && fx.afterimages[0].life < fx.afterimages[0].maxLife,
+     '残影随寿命渐隐（125ms 时仍在）');
+  fx.update(0.13);
+  ok(fx.afterimages.length === 0, '残影 250ms 后消退');
+  ok(fx.speedlines.length === 0, '速度线 2 帧即消退');
+  // 无 v1.1 通道（源码级断言在 T0，此处防运行时复活）
+  ok(fx.streaks === undefined, 'streaks 通道已从 FXSystem 删除');
+}
+
+/* ---------- T14 OrbAI 契约（v3.0 ADR-009：快照冻结 / 异常空输入 / click0 一次消费 / 内置 AI 策略） ---------- */
+console.log('[T14] OrbAI 契约：snapshotView 深冻结 / AIInput 同通路 / 异常降级 / 内置 AI 策略');
+{
+  /* 公共 helper：静止 AI（不移动不冲撞不举盾） */
+  const mkStubIdle = (seat) => new AIInput(
+    { name: 'idle', think() { return { move: { x: 0, y: 0 }, click0: false, guardHeld: false }; } }, seat);
+  // —— (a) snapshotView：视角切换 + 深冻结 ——
+  {
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    const m = new Match(deps, { mode: 'demo', p1Input: new AIInput(createBuiltinAI(), 'P1'),
+                                p2Input: new AIInput(createBuiltinAI(), 'P2') });
+    ok(m.player.x === CONFIG.SPAWN.PLAYER.x && m.p2.x === CONFIG.SPAWN.GHOST.x,
+       'demo 站位：P1 (230,360) vs P2 (1050,360)');
+    ok(m.player.combat.maxHP === 3 && m.p2.combat.maxHP === 3, 'demo 双方 HP=3');
+    const s1 = m.snapshotView('P1');
+    const s2 = m.snapshotView('P2');
+    ok(s1.self.x === m.player.x && s1.opp.x === m.p2.x &&
+       s2.self.x === m.p2.x && s2.opp.x === m.player.x,
+       'seat 视角切换：self/opp 互为镜像引用位');
+    ok(s1.self.hp === 3 && s1.opp.hp === 3 && s1.tick === m.tick,
+       '快照含 hp / tick');
+    ok(s1.self.guardCd === 0 && s1.opp.guardCd === 0, '无冷却时 guardCd=0');
+    ok(typeof s1.arena.CHARGE_DISTANCE === 'number' &&
+       Math.abs(s1.arena.CHARGE_DISTANCE - CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000) < 1e-9,
+       'arena.CHARGE_DISTANCE = 1680×0.100 = 168px');
+    ok(s1.arena.BALL_R === CONFIG.BALL.R && s1.arena.HIT_R === CONFIG.CHARGE.HIT_R &&
+       s1.arena.HIT_OFFSET === CONFIG.CHARGE.HIT_OFFSET &&
+       s1.arena.W === CONFIG.VIEW.W && s1.arena.H === CONFIG.VIEW.H,
+       'arena 常量齐备（BALL_R/HIT_R/HIT_OFFSET/W/H）');
+    let frozen = true;
+    try {
+      s1.self.x = 999; s1.opp.phase = 'HACK'; s1.arena.W = 0; s1.self.chargeDir.x = 9;
+    } catch (e) { /* 严格模式静默失败也算冻结成功 */ }
+    frozen = s1.self.x !== 999 && s1.opp.phase !== 'HACK' && s1.arena.W !== 0;
+    ok(frozen, '快照深冻结：AI 篡改快照不影响世界（Object.freeze）');
+  }
+
+  // —— (b) AIInput 同通路：think 决策经 Player 消费触发冲撞 ——
+  {
+    let asked = 0;
+    const impl = { name: 'stub', think() { asked++; return { move: { x: 1, y: 0 }, click0: true, guardHeld: false }; } };
+    const ai = new AIInput(impl, 'P1');
+    /* 独立接口测试（fakeMatch 提供 snapshotView，隔离于 Match 集成） */
+    const fakeMatch = { snapshotView: (seat) => ({ tick: 0,
+      self: { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } },
+      opp: { x: 100, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: -1, y: 0 } },
+      arena: { W: 1280, H: 720, BALL_R: 16, HIT_R: 20, HIT_OFFSET: 18, CHARGE_DISTANCE: 168 } }) };
+    ai.beginTick(fakeMatch);
+    ok(asked === 1, 'beginTick 每 tick 恰好 think 一次（快照在消费前生成）');
+    ok(ai.getMoveAxis().x === 1, 'AI 决策经 Input 同接口消费（move）');
+    ok(ai.consumeClick(0) === true && ai.consumeClick(0) === false, 'click0 帧内一次消费');
+    ok(ai.isDown('KeyR') === false, 'AI 无按键语义（isDown 恒 false）');
+    /* Match 集成：AI 输入驱动 Player 冲撞（p1Input 通路） */
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    const m = new Match(deps, { mode: 'demo', p1Input: new AIInput(impl, 'P1'),
+                                p2Input: mkStubIdle() });
+    m.update(STEP);                     // 顶部 beginTick → Player.update 消费 click0
+    ok(m.player.combat.phase === 'CHARGE_WINDUP', 'AI click0 经 Player 同通路触发冲撞');
+    ok(m.p2.combat.phase === 'IDLE', 'P2 静止 AI 不受影响');
+  }
+
+  // —— (c) 异常降级：think 抛错 → 空输入 + 不判负不崩局（ADR-009） ——
+  {
+    const bad = { name: 'bad', think() { throw new Error('boom'); } };
+    const ai = new AIInput(bad, 'P1');
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    let ended = null;
+    const m = new Match(deps, { mode: 'demo', p1Input: ai,
+                                p2Input: new AIInput(bad, 'P2'),
+                                onEnd: (s) => { ended = s; } });
+    let ticks = 0;
+    while (!m.ended && ticks < 120) { m.update(STEP); ticks++; }   // 跑 2s
+    ok(!m.ended && ticks === 120, '双 AI think 抛错 → 对局不崩不判负（持续空转）');
+    ok(m.player.combat.hp === 3 && m.p2.combat.hp === 3, '异常空输入不产生误伤');
+    ok(ai.getMoveAxis().x === 0 && ai.getMoveAxis().y === 0 && ai.guardHeld() === false,
+       '异常帧输入 = 全空');
+  }
+
+  // —— (d) 冷却期 guardHeld 忽略：Combat 层拒绝（AI 与人类同规则） ——
+  {
+    const p = new Player(100, 100);
+    const T14_GAME = { fx: { queue: [] } };   // guard_denied 负反馈通道桩
+    /* 可编程 AI：script 队列决定每帧决策（白盒驱动防御流；fakeMatch 供快照） */
+    const script = [];
+    const impl = { name: 'scripted', think() {
+      return script.length ? script.shift()
+                           : { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+    } };
+    const ai = new AIInput(impl, 'P1');
+    const fakeMatch = { snapshotView: () => ({ tick: 0,
+      self: { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } },
+      opp: { x: 100, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: -1, y: 0 } },
+      arena: { W: 1280, H: 720, BALL_R: 16, HIT_R: 20, HIT_OFFSET: 18, CHARGE_DISTANCE: 168 } }) };
+    const G = () => ({ move: { x: 0, y: 0 }, click0: false, guardHeld: true });
+    const R = () => ({ move: { x: 0, y: 0 }, click0: false, guardHeld: false });
+    script.push(G());
+    ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME);
+    ok(p.combat.phase === 'GUARD', 'AI guardHeld=true → 举盾');
+    for (let i = 0; i < 5; i++) { script.push(G()); ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME); }
+    ok(p.combat.phase === 'GUARD' && p.combat.t > 0, '持续举盾 6 帧（t = 已防御时长）');
+    script.push(R());                    // 松开 → manual 冷却 = 已防御时长
+    ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME);
+    const cd = p.combat._coolDur;
+    ok(p.combat.phase === 'GUARD_RELEASE' && cd > STEP, 'manual 松开进入冷却通道（cd = 举盾时长）');
+    let rejected = true;
+    for (let i = 0; i < 3 && p.combat.phase === 'GUARD_RELEASE'; i++) {
+      script.push(G());                  // 冷却期内重新按住
+      ai.beginTick(fakeMatch); p.update(STEP, ai, T14_GAME);
+      if (p.combat.phase === 'GUARD') { rejected = false; break; }
+    }
+    ok(rejected, '冷却期 guardHeld=true 被 Combat 拒绝（AI 与人类同规则）');
+  }
+
+  // —— (e) 内置 AI 策略 + compileAICode + AISlotStore ——
+  {
+    const builtin = createBuiltinAI();
+    ok(builtin.name === '内置示例' && typeof builtin.think === 'function', '内置 AI 工厂');
+    const mkSnap = (dist, oppPhase, tick) => ({
+      tick,
+      self: { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } },
+      opp: { x: dist, y: 0, phase: oppPhase, hp: 3, guardCd: 0, chargeDir: { x: -1, y: 0 } },
+      arena: { W: 1280, H: 720, BALL_R: 16, HIT_R: 32, HIT_OFFSET: 40, CHARGE_DISTANCE: 168 },
+    });
+    let d = builtin.think(mkSnap(300, 'IDLE', 10));
+    ok(d.move.x === 1 && d.click0 === false, '远距 300px：追踪不冲撞');
+    d = builtin.think(mkSnap(200, 'IDLE', 10));
+    ok(d.click0 === true, '近距 200px + 对手 IDLE → 冲撞');
+    d = builtin.think(mkSnap(200, 'GUARD', 10));
+    ok(d.click0 === false, '对手 GUARD → 不冲撞（防御态不列 vulnerable）');
+    d = builtin.think(mkSnap(200, 'CHARGE_WINDUP', 10));
+    // 30% 概率触发 30 tick 举盾；无论触发与否决策合法
+    ok(d.move.x === 1 && typeof d.guardHeld === 'boolean', '对手起手：决策合法（举盾概率 30%）');
+
+    const aiObj = compileAICode("{ name:'t', think(state){ return { move:{x:0,y:0}, click0:false, guardHeld:false }; } }");
+    ok(typeof aiObj.think === 'function' && aiObj.name === 't', '控制台代码串可编译为 AI 对象');
+    let threw = false;
+    try { compileAICode('({})'); } catch (e) { threw = true; }
+    ok(threw, '缺 think → 编译拒绝');
+    threw = false;
+    try { compileAICode('({think('); } catch (e) { threw = true; }
+    ok(threw, '语法错误 → 编译拒绝');
+  }
+}
+
+/* ---------- T15 无头对局（v3.0 §1.3：Node 双 AI 跑到 match_end，零 DOM） ---------- */
+console.log('[T15] 无头双 AI 对局：内置 AI 对局到 match_end + HP=3 击杀路径 + 超时裁决');
+{
+  const mkIdle = (seat) => new AIInput(
+    { name: 'idle', think() { return { move: { x: 0, y: 0 }, click0: false, guardHeld: false }; } }, seat);
+  // —— (a) 内置 AI vs 静止 AI：追踪+冲撞 → 3 次命中 → P1 胜（确定路径） ——
+  const run = (p1Spec, p2Spec, timeLimit) => {
+    const deps = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+    let ended = null;
+    const m = new Match(deps, {
+      mode: 'demo',
+      p1Input: p1Spec, p2Input: p2Spec, timeLimit,
+      onEnd: (seat, replay, secs) => { ended = { seat, replay, secs }; },
+    });
+    let ticks = 0;
+    while (!m.ended && ticks < Math.ceil(timeLimit / STEP) + 60) { m.update(STEP); ticks++; }
+    return { m, ended, ticks };
+  };
+  const r = run(new AIInput(createBuiltinAI(), 'P1'), mkIdle('P2'), 20);
+  ok(r.ended !== null, '无头对局在时限内跑到 match_end（' + (r.ticks * STEP).toFixed(2) + 's）');
+  ok(r.ended.seat === 'P1', '内置 AI 追踪静止对手 → P1 胜（seat 通道）');
+  ok(r.ended.replay === null, 'demo 收束不产 replay（零 Recorder）');
+  ok(r.m.p2.combat.phase === 'DEAD' && r.m.p2.combat.hp === 0,
+     '败者 HP=0 且进 DEAD（HP=3 击杀路径）');
+  ok(r.m.player.combat.hp > 0 && r.m.player.combat.hp <= 3, '胜者 HP 未归零');
+  ok(!r.m.recorder.recording, 'demo 对局零录制（recorder 未 begin）');
+
+  // —— (b) 双内置 AI 互战：60s 时限内必收束（对称 AI 可能相持 → 超时 DRAW 兜底亦为 match_end） ——
+  const r2v = run(new AIInput(createBuiltinAI(), 'P1'), new AIInput(createBuiltinAI(), 'P2'), 60);
+  ok(r2v.ended !== null && (r2v.ended.seat === 'P1' || r2v.ended.seat === 'P2' || r2v.ended.seat === null),
+     '双内置 AI 互战在 60s 内收束（' + (r2v.ticks * STEP).toFixed(1) + 's，seat=' + r2v.ended.seat + '）');
+  if (r2v.ended.seat === null) {        // 超时 DRAW：双方 HP 相等（裁决自洽）
+    ok(r2v.m.player.combat.hp === r2v.m.p2.combat.hp, '超时 DRAW：双方 HP 相等');
+  }
+
+  // —— (c) 超时裁决：双静止 AI → HP 相等 → DRAW（seat=null） ——
+  const r3 = run(mkIdle('P1'), mkIdle('P2'), 1.0);
+  ok(r3.ended !== null && r3.ended.seat === null,
+     '超时 + HP 相等 → DRAW（seat=null，§6.2）');
+  ok(r3.ended.secs >= 1.0 - STEP, '超时收束时刻 = timeLimit（±1 帧）');
+
+  // —— (d) 超时 HP 多者胜 ——
+  const deps3 = { input: new Input(stub.canvas), fx: new FXSystem(), audio: { play() {} } };
+  let ended3 = null;
+  const m3 = new Match(deps3, { mode: 'demo', p1Input: mkIdle('P1'), p2Input: mkIdle('P2'),
+                                timeLimit: 1.0, onEnd: (seat) => { ended3 = seat; } });
+  m3.p2.combat.hit();                   // 白盒：P2 先扣 1 血
+  let t3 = 0;
+  while (!m3.ended && t3 < 120) { m3.update(STEP); t3++; }
+  ok(ended3 === 'P1', '超时 HP 多者胜（P2 扣血 → P1 胜）');
+}
+
+/* ---------- T16 触屏纯逻辑（v3.0 ADR-010：Joystick/Button/TouchSource，node 事件桩喂值） ---------- */
+console.log('[T16] 触屏：摇杆死区/全速/knobOffset / 按钮 click0/滑出松开 / pointerId 隔离 / Input 聚合');
+{
+  // —— (a) VirtualJoystick ——
+  {
+    const j = new VirtualJoystick();
+    j.start(1, 100, 100);
+    j.move(1, 103, 101);                // 位移 ~3.2 < 死区 8
+    ok(j.axis.x === 0 && j.axis.y === 0, '死区 8 内输出零轴');
+    j.move(1, 160, 100);                // 正右 60px
+    ok(Math.abs(j.axis.x - 1) < 1e-9 && j.axis.y === 0, '死区外单位向量（全速无比例）');
+    j.move(1, 100 + 42, 100 + 42);      // 对角 60px 左右
+    ok(Math.abs(j.axis.x - Math.SQRT1_2) < 1e-9 && Math.abs(j.axis.y - Math.SQRT1_2) < 1e-9,
+       '对角归一化');
+    const off = j.knobOffset();
+    ok(Math.abs(Math.hypot(off.x, off.y) - (60 - 12)) < 1e-6, 'knobOffset 半径 = r−12 = 48px');
+    j.end(2);                           // 错误 id 不清
+    ok(j.pointerId === 1, 'pointerId 隔离：错误 id 忽略');
+    j.end(1);
+    ok(j.pointerId === null && j.axis.x === 0 && j.axis.y === 0, '抬起归零');
+  }
+
+  // —— (b) TouchButton ——
+  {
+    const b = new TouchButton(1150, 620, 44);
+    ok(b.contains(1150, 620) && !b.contains(1150, 620 + 45), 'contains 圆域判定');
+    b.down(7);
+    ok(b.pressed && b.consumeClick() === true, '按下即置 clickPending（不等 touchend）');
+    ok(b.consumeClick() === false, 'click0 一次消费');
+    b.down(7);
+    b.move(7, 1150, 620 + 50);          // 50 > 44 但 ≤ 1.2×44=52.8 → 容差内不松
+    ok(b.pressed, '滑出 1.2 倍容差内不松开');
+    b.move(7, 1150, 620 + 60);          // 60 > 52.8 → 松开
+    ok(!b.pressed, '滑出 1.2 倍容差即松开');
+    b.down(7); b.up(8);
+    ok(b.pressed, 'up id 隔离：错误 id 不松');
+    b.up(7);
+    ok(!b.pressed, 'up 正确 id 松开');
+  }
+
+  // —— (c) TouchSource：pointerId 隔离分配 ——
+  {
+    const ts = new TouchSource();
+    ts.pointerDown(10, 200, 300);       // 左半屏 → 摇杆
+    ok(ts.joystick.pointerId === 10, '左半屏手指 → 摇杆');
+    ts.pointerDown(11, 1150, 620);      // 攻击钮区
+    ok(ts.btnAtk.pointerId === 11 && ts.btnAtk.pressed, '钮区手指 → 攻击钮');
+    ts.pointerDown(12, 1000, 660);      // 防御钮区
+    ok(ts.btnGuard.pointerId === 12 && ts.btnGuard.pressed, '钮区手指 → 防御钮');
+    ts.pointerMove(10, 260, 300);
+    ok(Math.abs(ts.moveAxis().x - 1) < 1e-9, '摇杆手指移动 → 轴输出');
+    ok(ts.guardHeld() === true, '防御钮按住 → guardHeld');
+    ok(ts.consumeClick(0) === true, '攻击钮 → click0');
+    // 摇杆占用中：左半屏第二指不接管
+    ts.pointerDown(20, 300, 300);
+    ok(ts.joystick.pointerId === 10 && ts.joystick.pointerId !== 20,
+       '摇杆占用中：新手指不接管');
+    ts.pointerUp(20);
+    ts.pointerUp(10); ts.pointerUp(11); ts.pointerUp(12);
+    ok(ts.joystick.pointerId === null && !ts.btnAtk.pressed && !ts.btnGuard.pressed,
+       '各指抬起全复位');
+  }
+
+  // —— (d) Input 聚合：键鼠优先、触屏回落 ——
+  {
+    const input = new Input(stub.canvas);
+    ok(typeof input.getMoveAxis() === 'object' && input.getMoveAxis().x === 0,
+       '聚合输入空态零轴');
+    stub.fireWin('keydown', { code: 'KeyD', preventDefault() {} });
+    ok(input.getMoveAxis().x === 1, '键鼠轴优先');
+    stub.fireWin('keyup', { code: 'KeyD' });
+    // 触屏回落：摇杆占轴
+    input.touch.joystick.start(5, 100, 100);
+    input.touch.joystick.move(5, 160, 100);
+    ok(input.getMoveAxis().x === 1, '键鼠松开 → 触屏摇杆轴回落');
+    // 触屏攻击点击聚合
+    input.touch.btnAtk.down(5);
+    ok(input.consumeClick(0) === true, '触屏点击经 Input.consumeClick 聚合消费');
+    input.touch.joystick.end(5);
+  }
+}
+
+/* ---------- T17 菜单 IA（v3.0：五项 DOM + 二级屏/AI 编辑屏删净 + 联机骨架置灰） ---------- */
+console.log('[T17] 菜单 IA：五项 DOM / scr-boss+scr-ai 删净 / 联机骨架置灰 / 触屏与 OrbAI 要素');
+{
+  const html = fs.readFileSync(HTML, 'utf8');
+  const acts = ['solo', 'online', 'self', 'boss_solo', 'quit'];
+  const menuOk = acts.every((a) => html.includes('data-act="' + a + '"'));
+  ok(menuOk, '主菜单五项 data-act 齐备（solo/online/self/boss_solo/quit）');
+  ok(!html.includes('data-act="boss"') && !html.includes('data-act="ai"') &&
+     !html.includes('id="scr-boss"') && !html.includes('id="scr-ai"'),
+     '二级 boss 屏与 AI 编辑屏 DOM 删净（AI 保留为控制台 API）');
+  ok(html.includes('id="scr-online"') && html.includes('配对联机开发中') &&
+     /class="mi dis" data-ol="create"/.test(html) &&
+     /class="mi dis" data-ol="join"/.test(html),
+     '联机骨架：置灰按钮 + 「配对联机开发中」提示');
+  ok(html.includes('data-ol="back"'), '联机屏返回入口');
+  ok(html.includes('id="touchui"') && html.includes('id="joy-base"') &&
+     html.includes('id="joy-knob"') && html.includes('id="tbtn-atk"') &&
+     html.includes('id="tbtn-guard"'), '触屏控件 DOM 齐备');
+  ok(html.includes('id="portrait-mask"') && html.includes('请横屏游玩'),
+     '竖屏遮罩 DOM');
+  ok(/user-scalable=no/.test(html) && /viewport-fit=cover/.test(html) &&
+     /touch-action:\s*none/.test(html), '移动 viewport + touch-action 锁定');
+  ok(html.includes('window.OrbAI') && html.includes('startMatch') &&
+     html.includes('stopMatch'), 'window.OrbAI 控制台 API 挂载');
 }
 
 console.log('\n========================================');

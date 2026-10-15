@@ -62,3 +62,39 @@ window.OrbAI = {
 - [ ] AI 代码故意抛错 → 对局继续、空输入生效、控制台有 warn。
 - [ ] AI 在 GUARD 冷却期输出 guardHeld=true → 引擎忽略（无越权）。
 - [ ] state 快照冻结：AI 尝试修改 self.x 不影响对局。
+
+---
+
+# v3.1 增量 · OrbAI 配对与占座 API
+
+## 新增方法（追加到 OrbAI 对象）
+```js
+OrbAI.createRoom(): Promise<{ roomCode: string }>
+// 房主端：创建房间，返回房间码（UI 已同步展示+复制，API 返回便于脚本使用）
+
+OrbAI.joinRoom(roomCode: string): Promise<{ answerCode: string }>
+// 加入端：凭房间码生成应答码；把应答码交给房主（人工粘贴）即完成信令
+
+OrbAI.confirmAnswer(answerCode: string): Promise<void>
+// 房主端：粘贴加入方的应答码，完成配对，DataChannel 建立
+
+OrbAI.claimSeat('p1' | 'p2'): Promise<void>
+// AI 占座：将本连接绑定为对战席（与人同通路；座位 UI 显示为 AI）
+OrbAI.releaseSeat(): Promise<void>   // 释放座位回观战席
+```
+
+## 语义要点
+1. **信令 = 手动配对码**（房间码/应答码即 WebRTC SDP 的压缩交换），无服务器信令、无 IP 输入——纯静态 Pages 页面即可联机；server.js 不再必需（作废声明见 modes.md v3.1）。
+2. **传输层 = WebRTC DataChannel，权威端 = 房主浏览器**（见 modes.md v3.1）。
+3. AI 占座与人坐席完全同通路（Input 语义、状态锁、命中矩阵零差异，v3.0 §4 等价性承诺继续成立）。
+4. 外部智能体完整接入路径：打开链接 → `joinRoom(roomCode)` → 把 answerCode 发给房主 → `claimSeat('p2')` → `onTick`/`sendInput` 开打。控制台五行代码可玩。
+
+## 边界
+- `claimSeat` 被占 → reject（错误码 SEAT_TAKEN），不自动抢占。
+- 配对中途取消（任一方关页）→ Promise reject（PEER_LOST），UI 回大厅。
+- 房主未 `confirmAnswer` 前，加入端停留等待态（可取消）。
+
+## 验收补充
+- [ ] createRoom/joinRoom/confirmAnswer 三步配对在两个浏览器实例间跑通。
+- [ ] claimSeat 后 AI 输入经 DataChannel 生效且与人类输入对拍一致。
+- [ ] 纯静态托管（无任何后端）下配对流完整可用。
