@@ -1,0 +1,3108 @@
+
+(function () {
+'use strict';
+
+/* ============================================================
+ * §1 Config —— 全部数值常量唯一真源（控制清单 #1）
+ * ============================================================ */
+const CONFIG = {
+  VIEW: { W: 1280, H: 720 },
+  STEP: 1 / 60,                       // 固定逻辑步长（秒）
+  BALL: { R: 16, SPEED: 640 },        // v2.1：移速 640（翻倍）
+  CHARGE: { WINDUP: 0.050, ACTIVE: 0.100, RECOVERY: 0.050,
+            DASH_SPEED: 1680, HIT_R: 20, HIT_OFFSET: 18 },   // v2.1：1680×0.100=168px 位移不变；总周期 200ms
+  /* v2.3 防御重做：最长按住 3s；冷却三分支（松开=已防御时长 / 格挡成功=3s / 满额自动=3s） */
+  GUARD: { MAX_HOLD: 3.0, BLOCK_COOLDOWN: 3.0 },
+  BOUNCE: { DURATION: 0.400 },        // 格挡弹开（攻击者 400ms 强后摇，规则不变）
+  /* v2.2 对撞弹开：双方判定帧接触 → 各弹开 300ms（击退 60px/150ms + 硬直 150ms），不掉血 */
+  CLASH: { DURATION: 0.300, KNOCKBACK: 60, KNOCKBACK_DUR: 0.150,
+           RING: { LIFE: 0.200, R1: 40 }, FLASH: 0.060 },
+  HP: { MAX: 3 },                     // v2.2：废除一击必杀
+  HIT: { FLASH: 0.080, SHAKE: 3, LOW_PULSE: 0.600 },   // v2.2 受击反馈：白闪 80ms / 微震 3px / 低血脉动 600ms
+  /* v2.2 固定站位（全模式统一）：玩家恒左 / 幽灵恒右；「主客互换」作废 */
+  SPAWN: {
+    PLAYER:   { x: 230,  y: 360 },
+    DUMMY:    { x: 1050, y: 360 },    // 第 1 关木桩（HP=3，命中 3 次击碎）
+    GHOST:    { x: 1050, y: 360 },    // 幽灵出生点（v2.3 镜像回放后自然对齐）
+    L1_PLAYER:{ x: 230,  y: 360 },    // 玩家恒定出生点
+  },
+  BOUND: { INSET: 16 },               // 场地边界内缩
+  FX: { POOL: 300, TRAIL_INTERVAL: 0.040,
+        TRAIL:  { LIFE: 0.2, SIZE: 5, ALPHA: 0.25 },
+        /* I-40 更正（用户 09:4x 指令）：攻击特效 = v1.0 特效风格——
+         * 冲撞残影 3 段（间隔 25ms，alpha 0.5/0.35/0.2，寿命 250ms）+ 起手径向速度线 2 帧；
+         * v1.1 系列攻击特效均不采用（fx.md v2.1 节【作废声明】同步成立） */
+        AFTERIMAGE: { N: 3, GAP: 0.025, LIFE: 0.25,
+                      ALPHAS: [0.5, 0.35, 0.2] },          // 冲撞残影：沿冲撞方向 3 段
+        SPEEDLINES: { LIFE: 2 / 60, N: 10, LEN: 46 },      // 起手径向速度线（2 帧）
+        BURST:  { N_MIN: 14, N_JITTER: 5, SPEED_MIN: 200, SPEED_JITTER: 300,
+                  LIFE: 0.5, SIZE_MIN: 3, SIZE_JITTER: 3,
+                  RING: { LIFE: 0.25, R0: 0, R1: 90 } },       // 死亡爆裂+冲击环（全保留）
+        BREAK:  { N: 24, SPEED: 260, LIFE: 0.35, SIZE_MIN: 2, SIZE_JITTER: 2 },  // 碎盾
+        STUN:   { LIFE: 0.30, R0: 10, R1: 40 },                // 格挡弹开眩晕环
+        DENY:   { LIFE: 0.05, SIZE_PAD: 4, COLOR: '#888' },    // 负反馈灰闪（冷却期按右键沿用）
+  },
+  /* v2.2 顶部血量 UI：3 格光条 24×10 间隔 6；组中心 x≈340/940，y=24；标签在血条下 8px */
+  HPBAR: { W: 24, H: 10, GAP: 6, Y: 24, CX_P: 340, CX_G: 940, LABEL_DY: 18, RED_FLASH: 0.150 },
+  BANNER: { CLEAR_DUR: 1.2, DRAW_DUR: 0.6, ADVANCE_DUR: 1.2 },  // v2.1 AUTO_ADVANCE 横幅 1.2s
+  HITSTOP: 0.120,
+  GUARD_HITSTOP: 0.060,               // 碎盾 hitstop
+  DEATH_SLOW: { DUR: 1.0, SCALE: 0.3 },
+  SHAKE: { DEATH: 6, COLLIDE: 10, MISS: 2, HIT: 3, DECAY: 0.2 },   // v1.1：对撞 10px 重震恢复；受击微震 3px（v2.2）
+  PROTECT_TICKS: 30,                  // 500ms 首帧保护（60Hz × 0.5s）
+  COLOR: { PLAYER: '#ffe9c4', GHOST: '#7fd8e8' },
+  /* v3.0 模式 → 存储映射（联机挑战/联机boss/终极boss 随 v3.0 联机改版删除，
+   * RemoteGhostStore/ADR-007 作废；联机对战为 PVP 实时对战见 modes.md v3.0） */
+  MODES: {
+    solo:        { label: '单机挑战', opp: 'dummy', store: null },
+    self:        { label: '挑战自我', opp: 'ghost', store: 'local' },
+    boss_solo:   { label: '单机boss', opp: 'ghost', store: 'local' },
+    demo:        { label: 'AI 对局', opp: 'pvp',   store: null },   // 人机 / AI-vs-AI（OrbAI 管道）
+  },
+  /* 阈值（progression.md §2 原文数字；v3.0 联机三池阈值随模式删除） */
+  THRESHOLDS: {
+    SELF_PROMOTE: 20,           // 挑战自我 defeatedPlayers 达 20 → 晋级单机boss
+    BOSS_SOLO_DELETE: 20,       // 单机boss challengedSuccess 达 20 → 删除，顺位前移
+  },
+  VICTORY_DELAY: 0.9,           // VICTORY → RESULT 前的定格时长
+};
+
+/* ============================================================
+ * §2 Utils —— 纯函数
+ * ============================================================ */
+const clamp = (v, lo, hi) => v < lo ? lo : (v > hi ? hi : v);
+const lerp  = (a, b, t) => a + (b - a) * t;
+const len   = (x, y) => Math.hypot(x, y);
+function norm(x, y) {
+  const l = len(x, y);
+  return l > 1e-6 ? { x: x / l, y: y / l } : { x: 0, y: 0 };
+}
+/* v3.0：深冻结（OrbAI 快照防作弊，ai-interface.md §3） */
+function deepFreeze(o) {
+  if (o && typeof o === 'object') {
+    for (const k of Object.keys(o)) deepFreeze(o[k]);
+    Object.freeze(o);
+  }
+  return o;
+}
+
+/* ---------- replay 序列化（架构 v2.0 §2）：Uint16 量化 + base64 ----------
+ * q = round(x/1280 * 65535)，分辨率 ≈0.02px ≪ r16/r20，镜像回放无损 */
+function b64encode(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function b64decode(str) {
+  const s = atob(str);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+function serializeReplay(replay) {
+  const n = replay.trajectory.length >> 1;
+  const head = new Uint8Array(2 + n * 4);
+  const dv = new DataView(head.buffer);
+  dv.setUint16(0, n);
+  for (let i = 0; i < n; i++) {
+    const x = clamp(Math.round(replay.trajectory[2 * i] / CONFIG.VIEW.W * 65535), 0, 65535);
+    const y = clamp(Math.round(replay.trajectory[2 * i + 1] / CONFIG.VIEW.H * 65535), 0, 65535);
+    dv.setUint16(2 + i * 4, x);
+    dv.setUint16(4 + i * 4, y);
+  }
+  const ev = new TextEncoder().encode(JSON.stringify(replay.events || []));
+  const out = new Uint8Array(head.length + 4 + ev.length);
+  out.set(head);
+  new DataView(out.buffer).setUint32(head.length, ev.length);
+  out.set(ev, head.length + 4);
+  return b64encode(out);
+}
+function deserializeReplay(str) {
+  const bytes = b64decode(str);
+  const dv = new DataView(bytes.buffer);
+  const n = dv.getUint16(0);
+  const traj = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    traj[2 * i] = dv.getUint16(2 + i * 4) / 65535 * CONFIG.VIEW.W;
+    traj[2 * i + 1] = dv.getUint16(4 + i * 4) / 65535 * CONFIG.VIEW.H;
+  }
+  const evLen = dv.getUint32(2 + n * 4);
+  const evJson = new TextDecoder().decode(bytes.subarray(2 + n * 4 + 4, 2 + n * 4 + 4 + evLen));
+  let events = [];
+  try { events = JSON.parse(evJson); } catch (e) { events = []; }
+  return { duration: n * CONFIG.STEP, trajectory: traj, events };
+}
+
+/* ============================================================
+ * §3 Input —— 键鼠输入系统（v1.1：右键=长按防御）
+ * ============================================================ */
+/* ---------- v3.0 触屏源（ADR-010 双源聚合 / mobile.md）：纯逻辑类，事件绑定分离 ---------- */
+class VirtualJoystick {               // 左半屏动态原点摇杆：底座 r=60、死区 8、全速无比例
+  constructor() {
+    this.r = 60; this.dead = 8;
+    this.pointerId = null; this.origin = null;
+    this.axis = { x: 0, y: 0 };       // 归一化输出（死区外即单位向量）
+  }
+  start(id, x, y) { this.pointerId = id; this.origin = { x, y }; this.axis = { x: 0, y: 0 }; }
+  move(id, x, y) {
+    if (id !== this.pointerId || !this.origin) return this.axis;
+    const dx = x - this.origin.x, dy = y - this.origin.y;
+    const d = Math.hypot(dx, dy);
+    if (d < this.dead) { this.axis = { x: 0, y: 0 }; return this.axis; }
+    this.axis = { x: dx / d, y: dy / d };          // 全速无比例（零惯性手感，mobile.md §2）
+    return this.axis;
+  }
+  end(id) {
+    if (id !== this.pointerId) return;
+    this.pointerId = null; this.origin = null; this.axis = { x: 0, y: 0 };
+  }
+  knobOffset() { return { x: this.axis.x * (this.r - 12), y: this.axis.y * (this.r - 12) }; }
+}
+
+class TouchButton {                   // 圆钮：按下即生效（不等 touchend）；手指离开即松开
+  constructor(x, y, r) { this.x = x; this.y = y; this.r = r;
+    this.pressed = false; this.pointerId = null; this.clickPending = false; }
+  contains(x, y) { return Math.hypot(x - this.x, y - this.y) <= this.r; }
+  down(id) { this.pressed = true; this.pointerId = id; this.clickPending = true; }
+  move(id, x, y) {                    // 滑出命中区（1.2 倍容差）即松开（mobile.md §3）
+    if (id === this.pointerId && !this.contains(x, y) &&
+        Math.hypot(x - this.x, y - this.y) > this.r * 1.2) {
+      this.pressed = false; this.pointerId = null;
+    }
+  }
+  up(id) {
+    if (id !== this.pointerId) return;
+    this.pressed = false; this.pointerId = null;
+  }
+  consumeClick() { const c = this.clickPending; this.clickPending = false; return c; }
+}
+
+class TouchSource {
+  constructor() {
+    this.joystick = new VirtualJoystick();
+    this.btnAtk = new TouchButton(1150, 620, 48);    // 攻击钮 r44 显示 / 命中区 48 等效
+    this.btnGuard = new TouchButton(1000, 660, 40);  // 防御钮（斜向错开 120px 圆心距）
+    this.visible = false;
+  }
+  moveAxis() { return this.joystick.axis; }
+  guardHeld() { return this.btnGuard.pressed; }
+  consumeClick(btn) { return btn === 0 ? this.btnAtk.consumeClick() : false; }
+  /* pointerId 隔离分配：进入左半屏的手指→摇杆，其余按位置→按钮（mobile.md §3） */
+  pointerDown(id, x, y) {
+    if (x < CONFIG.VIEW.W / 2) { if (this.joystick.pointerId === null) this.joystick.start(id, x, y); return; }
+    if (this.btnAtk.contains(x, y)) this.btnAtk.down(id);
+    else if (this.btnGuard.contains(x, y)) this.btnGuard.down(id);
+  }
+  pointerMove(id, x, y) {
+    this.joystick.move(id, x, y);
+    this.btnAtk.move(id, x, y);
+    this.btnGuard.move(id, x, y);
+  }
+  pointerUp(id) {
+    this.joystick.end(id);
+    this.btnAtk.up(id);
+    this.btnGuard.up(id);
+  }
+}
+
+class Input {
+  constructor(canvas) {
+    this.held = new Set();
+    this.clicks = [];                   // 帧内待消费左键点击
+    this._guardHeld = false;            // 右键原始按住状态
+    this.mx = CONFIG.VIEW.W / 2;        // 鼠标逻辑坐标
+    this.my = CONFIG.VIEW.H / 2;
+    this.lastMoveDir = null;            // 三级方向解析的记忆缓存
+    this.touch = new TouchSource();     // v3.0 双源聚合（ADR-010）：键鼠 ⊕ 触屏，双源常开
+
+    window.addEventListener('keydown', (e) => {
+      this.held.add(e.code);
+      if (e.code.startsWith('Arrow')) e.preventDefault();
+    });
+    window.addEventListener('keyup', (e) => this.held.delete(e.code));
+    window.addEventListener('blur', () => {           // 防幽灵键 + 不残留姿态
+      this.held.clear();
+      this._guardHeld = false;
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 0) this.clicks.push(e.button);
+      if (e.button === 2) this._guardHeld = true;
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 2) this._guardHeld = false;    // v2.3：冷却归 Combat 层，无 Input 防抖
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      this.mx = (e.clientX - rect.left) / rect.width * CONFIG.VIEW.W;
+      this.my = (e.clientY - rect.top) / rect.height * CONFIG.VIEW.H;
+    });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // 控制 #7
+  }
+  isDown(code) { return this.held.has(code); }
+  /* v3.0 聚合：键鼠轴非零优先，否则触屏摇杆轴（非零移动统一写入 lastMoveDir 记忆） */
+  getMoveAxis() {
+    let x = 0, y = 0;
+    if (this.isDown('KeyW') || this.isDown('ArrowUp'))    y -= 1;
+    if (this.isDown('KeyS') || this.isDown('ArrowDown'))  y += 1;
+    if (this.isDown('KeyA') || this.isDown('ArrowLeft'))  x -= 1;
+    if (this.isDown('KeyD') || this.isDown('ArrowRight')) x += 1;
+    if (x !== 0 || y !== 0) return norm(x, y);          // 对角归一化
+    const t = this.touch.moveAxis();
+    if (t.x !== 0 || t.y !== 0) return t;
+    return { x: 0, y: 0 };
+  }
+  guardHeld() { return this._guardHeld || this.touch.guardHeld(); }
+  /* 冲撞方向三级解析：移动输入 > 记忆方向 > 鼠标方向兜底
+   * （触屏态第三级在 Player 层退化为「朝对手兜底」，架构 v3.0 §3.1） */
+  getChargeDir(pos) {
+    const axis = this.getMoveAxis();
+    if (axis.x !== 0 || axis.y !== 0) {
+      this.lastMoveDir = axis;
+      return axis;
+    }
+    if (this.lastMoveDir) return this.lastMoveDir;
+    return norm(this.mx - pos.x, this.my - pos.y);   // 从未移动过 → 鼠标兜底
+  }
+  consumeClick(btn) {                   // 帧内消费一次左键点击（键鼠/触屏任一源）
+    const i = this.clicks.indexOf(btn);
+    if (i >= 0) { this.clicks.splice(i, 1); return true; }
+    return this.touch.consumeClick(btn);   // v3.0 聚合
+  }
+  endFrame() { this.clicks.length = 0; } // 未消费的点击不跨帧排队
+}
+
+/* ============================================================
+ * §4 Entities —— Ball / Player / Dummy / GhostPlayer
+ * ============================================================ */
+class Ball {
+  constructor(x, y, r) {
+    this.x = x; this.y = y; this.r = r;
+    this.facing = 0;                  // 朝向角（打击圈方向）
+    this.combat = null;
+    this.dead = false;
+  }
+}
+
+class Player extends Ball {
+  constructor(x, y) {
+    super(x, y, CONFIG.BALL.R);
+    this.combat = new Combat();
+    this.combat.owner = this;
+    this.trailTimer = 0;
+    this._prevGuardHeld = false;
+  }
+  update(dt, input, game) {
+    if (this.combat.phase === 'DEAD') return;
+    const c = this.combat;
+
+    // 冲撞意图（左键，帧内消费语义）
+    if (input.consumeClick(0) && c.phase === 'IDLE') {
+      let dir = input.getChargeDir(this);
+      if (dir.x === 0 && dir.y === 0) {
+        // v3.0：无方向输入（触屏静止/鼠标未动）→ 朝对手兜底（架构 §3.1 一行裁定）
+        const foe = game.p2 || game.ghost || game.dummy;
+        if (foe) dir = norm(foe.x - this.x, foe.y - this.y);
+      }
+      c.startCharge(dir, game.tick);
+    }
+
+    // 防御意图（右键长按）：仅 IDLE 可进；GUARD 中松开 → 冷却=已防御时长（v2.3）
+    if (c.phase === 'IDLE' && input.guardHeld()) {
+      c.startGuard();
+    }
+    if (c.phase === 'GUARD' && !input.guardHeld()) {
+      c.releaseGuard('manual');
+    }
+    // 冷却期（GUARD_RELEASE）新按下右键：50ms 暗淡负反馈（guard.md 沿用）
+    if (c.phase === 'GUARD_RELEASE' && input.guardHeld() && !this._prevGuardHeld) {
+      game.fx.queue.push({ type: 'guard_denied', x: this.x, y: this.y });
+    }
+    this._prevGuardHeld = input.guardHeld();
+
+    // 移动锁：起手+判定+GUARD+BOUNCE 锁定；RECOVERY/GUARD_RELEASE/IDLE 可移动
+    const locked = (c.phase === 'CHARGE_WINDUP' || c.phase === 'CHARGE_ACTIVE' ||
+                    c.phase === 'GUARD' || c.phase === 'BOUNCE');
+    if (!locked) {
+      const axis = input.getMoveAxis();
+      if (axis.x !== 0 || axis.y !== 0) {
+        this.x += axis.x * CONFIG.BALL.SPEED * dt;
+        this.y += axis.y * CONFIG.BALL.SPEED * dt;
+        this.trailTimer += dt;
+        if (this.trailTimer >= CONFIG.FX.TRAIL_INTERVAL) {
+          this.trailTimer = 0;
+          game.fx.queue.push({ type: 'trail', x: this.x, y: this.y });
+        }
+      }
+    }
+    this.clampToBounds();
+
+    c.update(dt);
+  }
+  clampToBounds() {
+    const i = CONFIG.BOUND.INSET;
+    this.x = clamp(this.x, i, CONFIG.VIEW.W - i);
+    this.y = clamp(this.y, i, CONFIG.VIEW.H - i);
+  }
+}
+
+class Dummy extends Ball {           // 不移动、不还手，仅可被命中（v2.2：HP=3，命中 3 次击碎）
+  constructor(x, y) {
+    super(x, y, CONFIG.BALL.R);
+    this.combat = new Combat();
+    this.combat.owner = this;
+  }
+}
+
+class GhostPlayer extends Ball {
+  constructor(replay, offsetX, offsetY) {
+    /* v2.3 水平镜像复刻：回放位置 x' = 1280 − x，offset = 幽灵出生点 − 镜像后玩家出生点
+     * （由 CONFIG 推导，勿硬编码；SPAWN.GHOST=1050、VIEW.W−SPAWN.PLAYER.x=1050 → offset=(0,0)） */
+    super(CONFIG.SPAWN.GHOST.x, CONFIG.SPAWN.GHOST.y, CONFIG.BALL.R);
+    this.replay = replay;
+    this.offX = offsetX; this.offY = offsetY;
+    this.combat = new Combat();
+    this.combat.owner = this;
+    this.combat.onAction = null;      // 幽灵不回录
+    this.eventPtr = 0;
+    this._lastTT = 0;
+  }
+  /* 入参 tick = Match.tick（与录制事件 t 同源，控制 #11）；循环回放 t mod T，镜像复刻 */
+  update(tick, dt, game) {
+    if (this.combat.phase === 'DEAD') return;
+    const traj = this.replay.trajectory;
+    const T = traj.length / 2;
+    const tt = tick % T;
+    if (tt < this._lastTT) this.eventPtr = 0;   // 循环接缝：事件指针归零
+    this._lastTT = tt;
+
+    this.x = CONFIG.VIEW.W - traj[2 * tt] + this.offX;     // v2.3：水平镜像，y 不变
+    this.y = traj[2 * tt + 1] + this.offY;
+    this.clampToBounds();
+
+    // 事件回放：整数帧号比较（控制 #3）；非 IDLE 到达的事件安全丢弃（控制 #14）
+    const events = this.replay.events;
+    while (this.eventPtr < events.length && events[this.eventPtr].t <= tt) {
+      const ev = events[this.eventPtr++];
+      if (ev.t < CONFIG.PROTECT_TICKS) continue;  // 首帧保护：500ms 内动作不触发
+      if (ev.type === 'charge') {
+        if (this.combat.phase === 'IDLE') {
+          // v2.3 镜像换算（回放侧唯一换算点）：dirAngle' = π − dirAngle
+          // 玩家朝右撞(dirAngle=0) → 幽灵朝左撞(facing=π)
+          const ang = Math.PI - ev.dirAngle;
+          this.combat.startCharge({ x: Math.cos(ang), y: Math.sin(ang) }, tick);
+        }
+      } else if (ev.type === 'guard_begin') {
+        if (this.combat.phase === 'IDLE') this.combat.startGuard();     // guard 原样回放
+      } else if (ev.type === 'guard_end') {
+        if (this.combat.phase === 'GUARD') this.combat.releaseGuard('manual');  // 幽灵侧无冷却语义差异，幂等
+      }
+    }
+
+    this.combat.update(dt);
+  }
+  clampToBounds() {
+    const i = CONFIG.BOUND.INSET;
+    this.x = clamp(this.x, i, CONFIG.VIEW.W - i);
+    this.y = clamp(this.y, i, CONFIG.VIEW.H - i);
+  }
+}
+
+/* ============================================================
+ * §5 Combat —— 战斗状态机 + 命中判定
+ * ============================================================ */
+const CombatState = { IDLE: 'IDLE', CHARGE_WINDUP: 'CHARGE_WINDUP',
+  CHARGE_ACTIVE: 'CHARGE_ACTIVE', CHARGE_RECOVERY: 'CHARGE_RECOVERY',
+  GUARD: 'GUARD', GUARD_RELEASE: 'GUARD_RELEASE', BOUNCE: 'BOUNCE', CLASH: 'CLASH', DEAD: 'DEAD' };
+
+class Combat {
+  constructor() {
+    this.phase = CombatState.IDLE;
+    this.t = 0;                       // 阶段内计时
+    this.startTick = -1;              // 本次冲撞起手帧号（录制事件 t 同源；v2.2 起不参与裁决）
+    this.chargeDir = { x: 1, y: 0 };  // 冲撞方向单位向量（起手时锁定，v1.2 向量契约）
+    this.dashFrom = { x: 0, y: 0 };   // CHARGE_ACTIVE / CLASH 击退端点插值（控制 #4）
+    this.dashTo = { x: 0, y: 0 };
+    this.onAction = null;             // (type, dirAngle) → Recorder（仅玩家）
+    /* v2.2：HP=3，归 0 才死；命中结算标记（每次冲撞对同一目标至多一次） */
+    this.hp = CONFIG.HP.MAX;
+    this.maxHP = CONFIG.HP.MAX;
+    this._hitVictims = new Set();
+    /* v2.3：防御冷却三分支。GUARD 期间 t = 已防御时长；GUARD_RELEASE 期间 t = 冷却已流逝 */
+    this._guardDur = 0;               // 结束防御时锁定的已防御时长（manual 分支冷却取值）
+    this._coolDur = 0;                // 本次 GUARD_RELEASE 冷却总时长
+    this._expire = false;             // 满额 3s 标记：本帧保持 GUARD（格挡优先），下帧自动结束
+  }
+  _record(type, ang) { if (this.onAction) this.onAction(type, ang); }
+
+  /* IDLE + 方向有效 → CHARGE_WINDUP（v1.2 向量契约：角度只在入口换算一次） */
+  startCharge(dirVec, tick) {
+    if (this.phase !== CombatState.IDLE) return false;
+    this.phase = CombatState.CHARGE_WINDUP;
+    this.t = 0;
+    this.startTick = tick;
+    this.chargeDir = dirVec;          // 单位向量，起手即锁定不修正（attack.md 边界 1）
+    this.owner.facing = Math.atan2(dirVec.y, dirVec.x);   // 打击圈/渲染用角度
+    this._hitVictims.clear();         // 新冲撞新结算窗口（v2.2 矩阵 D：同一目标至多一次）
+    this._record('charge', this.owner.facing);            // 录制侧对外契约：dirAngle
+    return true;
+  }
+
+  /* 仅 IDLE 可进（冷却期/各相位按右键无效）；v2.3 无 Input 防抖门槛 */
+  startGuard() {
+    if (this.phase !== CombatState.IDLE) return false;
+    this.phase = CombatState.GUARD;
+    this.t = 0;
+    this._expire = false;
+    this._record('guard_begin');
+    return true;
+  }
+
+  /* GUARD → GUARD_RELEASE（冷却计时通道）。v2.3 冷却三分支：
+   * manual：冷却 = 本次已防御时长（无下限）；block/timeout：冷却 3s。幂等 */
+  releaseGuard(reason) {
+    if (this.phase !== CombatState.GUARD) return false;
+    this._guardDur = this.t;                    // 满额帧格挡优先：t 在满额帧冻结于 MAX_HOLD
+    this._coolDur = (reason === 'manual') ? this._guardDur : CONFIG.GUARD.BLOCK_COOLDOWN;
+    this.phase = CombatState.GUARD_RELEASE;
+    this.t = 0;
+    this._expire = false;
+    this._record('guard_end');
+    return true;
+  }
+
+  /* 格挡：攻击者弹开 400ms（dash 停在当前位置，无击退）——现行规则不变 */
+  bounce() {
+    console.assert(this.phase === 'CHARGE_ACTIVE', 'bounce only from CHARGE_ACTIVE');
+    this.phase = CombatState.BOUNCE;
+    this.t = 0;
+  }
+
+  /* v2.2 对撞弹开：沿连线向外击退 60px/150ms + 硬直 150ms，不掉血 */
+  clash(dirVec) {
+    console.assert(this.phase === 'CHARGE_ACTIVE' || this.phase === 'CHARGE_WINDUP' || this.phase === 'IDLE',
+                   'clash from active/windup contact');
+    this.phase = CombatState.CLASH;
+    this.t = 0;
+    this.chargeDir = dirVec;
+    this.owner.facing = Math.atan2(dirVec.y, dirVec.x);
+    const i = CONFIG.BOUND.INSET;
+    this.dashFrom = { x: this.owner.x, y: this.owner.y };
+    this.dashTo = {
+      x: clamp(this.owner.x + dirVec.x * CONFIG.CLASH.KNOCKBACK, i, CONFIG.VIEW.W - i),
+      y: clamp(this.owner.y + dirVec.y * CONFIG.CLASH.KNOCKBACK, i, CONFIG.VIEW.H - i),
+    };
+  }
+
+  /* v2.2 命中：HP −1，归 0 才死。返回 'dead' | 'hit' */
+  hit() {
+    console.assert(this.phase !== 'DEAD', 'no hit on dead');
+    this.hp -= 1;
+    if (this.hp <= 0) { this.hp = 0; this.phase = CombatState.DEAD; this.t = 0; return 'dead'; }
+    return 'hit';
+  }
+
+  /* v2.0 兼容：直接击杀（DEAD 断言保留） */
+  kill() {
+    console.assert(this.phase !== 'DEAD', 'no double-kill');
+    this.phase = CombatState.DEAD;
+    this.t = 0;
+  }
+
+  update(dt) {
+    if (this.phase === CombatState.DEAD) return;
+
+    switch (this.phase) {
+      case CombatState.CHARGE_WINDUP:
+        this.t += dt;
+        if (this.t >= CONFIG.CHARGE.WINDUP) {
+          this.phase = CombatState.CHARGE_ACTIVE;
+          this.t = 0;
+          const dist = CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE;   // 168px
+          const i = CONFIG.BOUND.INSET;
+          this.dashFrom = { x: this.owner.x, y: this.owner.y };
+          // M1' 贴墙 clamp：端点按边界内缩约束，判定帧 lerp 自然被截断、不穿墙
+          this.dashTo = {
+            x: clamp(this.owner.x + this.chargeDir.x * dist, i, CONFIG.VIEW.W - i),
+            y: clamp(this.owner.y + this.chargeDir.y * dist, i, CONFIG.VIEW.H - i),
+          };
+        }
+        break;
+      case CombatState.CHARGE_ACTIVE: {
+        this.t += dt;
+        const k = Math.min(1, this.t / CONFIG.CHARGE.ACTIVE);
+        this.owner.x = lerp(this.dashFrom.x, this.dashTo.x, k);
+        this.owner.y = lerp(this.dashFrom.y, this.dashTo.y, k);
+        if (this.t >= CONFIG.CHARGE.ACTIVE) { this.phase = CombatState.CHARGE_RECOVERY; this.t = 0; }
+        break;
+      }
+      case CombatState.CHARGE_RECOVERY:               // 后摇：可被打（矩阵「普通」行）
+        this.t += dt;
+        if (this.t >= CONFIG.CHARGE.RECOVERY) { this.phase = CombatState.IDLE; this.t = 0; }
+        break;
+      case CombatState.GUARD:
+        this.t += dt;                                 // t = 已防御时长（v2.3 manual 冷却取值）
+        if (this.t >= CONFIG.GUARD.MAX_HOLD) {
+          if (!this._expire) {
+            // 满额帧冻结时长不结束：保持 GUARD 让同帧命中先结算格挡（先到先结算，格挡优先）
+            this._expire = true;
+            this.t = CONFIG.GUARD.MAX_HOLD;
+          } else if (this.t >= CONFIG.GUARD.MAX_HOLD + CONFIG.STEP - 1e-9) {
+            this.releaseGuard('timeout');             // 满额帧未被命中 → 下一帧自动结束（冷却 3s）
+          }
+        }
+        break;
+      case CombatState.GUARD_RELEASE:                 // v2.3 冷却计时通道：可移动可冲撞，不可再盾
+        this.t += dt;
+        if (this.t >= this._coolDur) { this.phase = CombatState.IDLE; this.t = 0; }
+        break;
+      case CombatState.BOUNCE:                        // 400ms 强后摇，可被反击命中
+        this.t += dt;
+        if (this.t >= CONFIG.BOUNCE.DURATION) { this.phase = CombatState.IDLE; this.t = 0; }
+        break;
+      case CombatState.CLASH: {                       // v2.2 对撞弹开 300ms
+        this.t += dt;
+        {                                             // 击退段：端点插值 60px/150ms（k 钳 1，硬直段钉在终点）
+          const k = Math.min(1, this.t / CONFIG.CLASH.KNOCKBACK_DUR);
+          this.owner.x = lerp(this.dashFrom.x, this.dashTo.x, k);
+          this.owner.y = lerp(this.dashFrom.y, this.dashTo.y, k);
+        }
+        if (this.t >= CONFIG.CLASH.DURATION) { this.phase = CombatState.IDLE; this.t = 0; }
+        break;
+      }
+      default: break;
+    }
+  }
+
+  canBeHit() { return this.phase !== CombatState.DEAD; }
+}
+
+/* 打击圈：r20 @ 球心前方 18px（判定帧内随球心每帧重算；v2.2 E：随实际球心=碰撞截停后位置） */
+function hitCircleOf(b) {
+  return {
+    x: b.x + Math.cos(b.facing) * CONFIG.CHARGE.HIT_OFFSET,
+    y: b.y + Math.sin(b.facing) * CONFIG.CHARGE.HIT_OFFSET,
+    r: CONFIG.CHARGE.HIT_R,
+  };
+}
+
+/* Step1 收集用纯判定（v2.2 命中矩阵，只读，供 HitResolver 与单测共用）：
+ * 'hit'（目标普通：IDLE/移动/后摇/弹开/冷却）| 'clash'（目标判定帧）|
+ * 'inv_windup'（目标无敌起手）| 'guard'（目标防御）| null */
+function checkChargeHit(attacker, defender) {
+  if (attacker.combat.phase !== CombatState.CHARGE_ACTIVE) return null;
+  if (defender.combat.phase === CombatState.DEAD) return null;
+  if (attacker.combat._hitVictims.has(defender)) return null;   // 矩阵 D：同一冲撞对同一目标至多一次
+  const c = hitCircleOf(attacker);
+  const d = len(c.x - defender.x, c.y - defender.y);
+  if (!Number.isFinite(d)) return null;             // v1.2 NaN 防御：异常数据不产生假阳性
+  if (d >= c.r + defender.r) return null;
+  const dp = defender.combat.phase;
+  if (dp === CombatState.GUARD) return 'guard';
+  if (dp === CombatState.CHARGE_ACTIVE) return 'clash';
+  if (dp === CombatState.CHARGE_WINDUP) return 'inv_windup';
+  return 'hit';                                     // 普通（含 RECOVERY/BOUNCE/CLASH/GUARD_RELEASE）
+}
+
+/* HitResolver 裁决核心（Step2，v2.2）：对称纯函数，控制 #15
+ * 输入 events: [{attacker, defender, kind}]；产出由 Game.Step3 执行。
+ * 双方判定帧接触（双 clash，含同 tick）→ 对撞弹开（废除 startTick 裁决与 DRAW 触发）。
+ * 混合事件在 1v1 下不可能（同一实体状态唯一），filter 兜底取全部 clash。 */
+function adjudicate(events) {
+  if (events.length === 0) return { type: 'none' };
+  const clashes = events.filter((e) => e.kind === 'clash');
+  if (clashes.length >= 2) return { type: 'clash', a: clashes[0].attacker, b: clashes[1].attacker };
+  if (clashes.length === 1) return { type: 'clash', a: clashes[0].attacker, b: clashes[0].defender };
+  const e = events[0];
+  if (e.kind === 'guard') return { type: 'guard', attacker: e.attacker, defender: e.defender };
+  if (e.kind === 'inv_windup') return { type: 'ineffective', attacker: e.attacker, defender: e.defender };
+  return { type: 'win', winner: e.attacker, loser: e.defender };
+}
+
+/* v2.2 E 实体碰撞：两球本体圈重叠 → 沿连线软推挤分离至恰好不重叠
+ * 任何状态、无伤害、无特效、不触发任何状态；DEAD 不推（尸体静止）。
+ * 冲撞路径被碰撞截停：每帧分离修正后判定圈随实际球心（hitCircleOf 帧内重算） */
+function resolveOverlap(a, b) {
+  if (a.combat.phase === CombatState.DEAD || b.combat.phase === CombatState.DEAD) return;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const d = len(dx, dy);
+  const min = a.r + b.r;
+  if (d >= min) return;
+  const push = (min - d) / 2;                   // 各推一半重叠量
+  const ux = d > 1e-6 ? dx / d : 1, uy = d > 1e-6 ? dy / d : 0;   // 完全重合 → 沿 +x 分离
+  const i = CONFIG.BOUND.INSET;
+  a.x = clamp(a.x - ux * push, i, CONFIG.VIEW.W - i);
+  a.y = clamp(a.y - uy * push, i, CONFIG.VIEW.H - i);
+  b.x = clamp(b.x + ux * push, i, CONFIG.VIEW.W - i);
+  b.y = clamp(b.y + uy * push, i, CONFIG.VIEW.H - i);
+}
+
+/* ============================================================
+ * §6 Recorder —— 轨迹录制 / 回放数据（ADR-003 混合结构）
+ * ============================================================ */
+class Recorder {
+  constructor() {
+    this.frames = new Float32Array(1024 * 2);  // 增长式缓冲，倍增扩容
+    this.events = [];
+    this.tickCount = 0;
+    this.recording = false;
+  }
+  begin() {                            // TUTORIAL 进入时调用
+    this.frames = new Float32Array(1024 * 2);
+    this.events = [];
+    this.tickCount = 0;
+    this.recording = true;
+  }
+  _ensure(cap) {
+    if (cap <= this.frames.length) return;
+    let n = this.frames.length;
+    while (n < cap) n *= 2;
+    const bigger = new Float32Array(n);
+    bigger.set(this.frames);
+    this.frames = bigger;
+  }
+  sample(x, y) {                       // 每逻辑帧调用一次
+    if (!this.recording) return;
+    this._ensure((this.tickCount + 1) * 2);
+    this.frames[2 * this.tickCount] = x;
+    this.frames[2 * this.tickCount + 1] = y;
+    this.tickCount++;
+  }
+  /* v1.1 事件类型：charge{dirAngle} / guard_begin / guard_end
+   * t 由调用方传 Game.tick（控制 #11：与 startTick、回放 tick 同源） */
+  recordAction(type, dirAngle, t) {
+    if (!this.recording) return;
+    this.events.push({ t: (t !== undefined ? t : this.tickCount), type, dirAngle });
+  }
+  /* v2.0：不停录截取当前进度（solo 教学关 → 镜像幽灵来源） */
+  snapshot() {
+    const trajectory = this.frames.slice(0, this.tickCount * 2);
+    const events = this.events.filter((e) => e.t <= this.tickCount);
+    return { duration: this.tickCount * CONFIG.STEP, trajectory, events };
+  }
+  /* v2.0：DRAW 等无效段丢弃——清空缓冲但保持录制（modes.md §3.2） */
+  reset() {
+    this.events = [];
+    this.tickCount = 0;
+  }
+  /* TUTORIAL_CLEAR 时调用；平局/死亡重开不重录 */
+  finalize() {
+    this.recording = false;
+    const trajectory = this.frames.slice(0, this.tickCount * 2);
+    const events = this.events.slice().sort((a, b) => a.t - b.t);
+    return {
+      duration: this.tickCount * CONFIG.STEP,
+      trajectory,                      // 长度 = 2*tickCount
+      events,
+    };
+  }
+}
+
+/* ============================================================
+ * §7 FX —— 粒子池 + 特效播放器（ADR-004：预分配 300 + 事件队列）
+ * ============================================================ */
+class Particle {
+  constructor() { this.alive = false; this.init(0, 0, 0, 0, 0, 0, '#fff'); }
+  init(x, y, vx, vy, life, size, color) {
+    this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+    this.life = life; this.maxLife = life; this.size = size;
+    this.color = color; this.alive = true; this.kind = 'dot';
+  }
+}
+
+class FXSystem {
+  constructor() {
+    this.pool = [];
+    for (let i = 0; i < CONFIG.FX.POOL; i++) this.pool.push(new Particle());
+    this.freeList = [];               // 索引栈
+    for (let i = CONFIG.FX.POOL - 1; i >= 0; i--) this.freeList.push(i);
+    this.queue = [];                  // 逻辑期只入队，帧末 flush（控制 #2）
+    this.lastEmitted = [];            // v3.1：flush 前的帧事件副本（联机快照 events 字段来源）
+    this.afterimages = [];            // I-40：冲撞残影（v1.0 特效风格语言：球体轮廓快照）
+    this.speedlines = [];             // I-40：起手径向速度线（2 帧消散）
+    this.rings = [];                  // 冲击环（r0→r1）：死亡爆裂 / 格挡眩晕 / 对撞弹开
+    this.halos = [];                  // guard_halo：常驻附着光圈（不走粒子池，fx.md §6.5）
+    this.shake = 0;                   // 屏幕震动幅度（仅渲染层偏移，不回写世界坐标）
+    this.ambientAlive = 0;            // 氛围粒子存活计数（menu.md §6 上限 40）
+  }
+
+  /* 池分配：优先 freeList；耗尽则回收最老 trail（ADR-004 优先级丢弃） */
+  _alloc(kind) {
+    if (this.freeList.length > 0) return this.pool[this.freeList.pop()];
+    let victim = -1, oldest = Infinity;
+    for (let i = 0; i < this.pool.length; i++) {
+      const p = this.pool[i];
+      if (!p.alive) { victim = i; break; }
+      if (p.kind === 'trail' && p.life < oldest) { oldest = p.life; victim = i; }
+    }
+    if (victim < 0) for (let i = 0; i < this.pool.length; i++) {
+      if (this.pool[i].life < oldest) { oldest = this.pool[i].life; victim = i; }
+    }
+    if (victim >= 0) { this.pool[victim].alive = false; return this.pool[victim]; }
+    return null;
+  }
+
+  emit(ev) {
+    const r = Math.random;
+    const FX = CONFIG.FX;
+    switch (ev.type) {
+      case 'trail':
+        this._spawn(ev.x, ev.y, 0, 0, FX.TRAIL.LIFE, FX.TRAIL.SIZE, CONFIG.COLOR.PLAYER, 'trail');
+        break;
+      case 'charge_afterimages': {     // I-40：冲撞残影 3 段（沿冲撞方向 25ms 间隔，寿命 250ms）
+        const A = FX.AFTERIMAGE;
+        const step = CONFIG.CHARGE.DASH_SPEED * A.GAP;   // 42px/段（1680×0.025）
+        for (let k = 0; k < A.N; k++) {
+          this.afterimages.push({
+            x: ev.x + Math.cos(ev.ang) * step * k,
+            y: ev.y + Math.sin(ev.ang) * step * k,
+            r: ev.r, color: ev.color,
+            life: A.LIFE, maxLife: A.LIFE, alpha: A.ALPHAS[k],
+          });
+        }
+        break;
+      }
+      case 'charge_speedlines': {      // I-40：起手径向速度线（自球心向外放射，2 帧消散）
+        const S = FX.SPEEDLINES;
+        for (let k = 0; k < S.N; k++) {
+          const a = (k / S.N) * Math.PI * 2 + ev.ang;
+          this.speedlines.push({ x: ev.x, y: ev.y, ang: a,
+                                 life: S.LIFE, maxLife: S.LIFE, len: S.LEN });
+        }
+        break;
+      }
+      case 'clash_ring': {             // v2.2 对撞弹开：双向冲击环 r0→40px，200ms
+        this.rings.push({ x: ev.x, y: ev.y, life: CONFIG.CLASH.RING.LIFE,
+                          maxLife: CONFIG.CLASH.RING.LIFE, r0: 0, r1: CONFIG.CLASH.RING.R1,
+                          dir: ev.dir || 0 });
+        break;
+      }
+      case 'burst': {                  // 死亡爆裂 14~18 粒 + 冲击环（对撞双倍爆裂 dormant：v2.2 起无触发源）
+        const B = FX.BURST;
+        const n = ev.double ? 2 * (B.N_MIN + Math.floor(r() * B.N_JITTER))
+                            : B.N_MIN + Math.floor(r() * B.N_JITTER);
+        for (let k = 0; k < n; k++) {
+          const a = r() * Math.PI * 2, sp = B.SPEED_MIN + r() * B.SPEED_JITTER;
+          this._spawn(ev.x, ev.y, Math.cos(a) * sp, Math.sin(a) * sp,
+                      B.LIFE, B.SIZE_MIN + r() * B.SIZE_JITTER, ev.color, 'dot');
+        }
+        this.rings.push({ x: ev.x, y: ev.y, life: B.RING.LIFE, maxLife: B.RING.LIFE,
+                          r0: B.RING.R0, r1: B.RING.R1 });
+        this.shake = Math.max(this.shake, ev.shake || CONFIG.SHAKE.DEATH);
+        break;
+      }
+      case 'shield_break': {           // 护盾碎裂：碎片粒子（青）
+        for (let k = 0; k < FX.BREAK.N; k++) {
+          const a = r() * Math.PI * 2, sp = FX.BREAK.SPEED * (0.7 + r() * 0.6);
+          this._spawn(ev.x, ev.y, Math.cos(a) * sp, Math.sin(a) * sp,
+                      FX.BREAK.LIFE, FX.BREAK.SIZE_MIN + r() * FX.BREAK.SIZE_JITTER,
+                      CONFIG.COLOR.GHOST, 'dot');
+        }
+        break;
+      }
+      case 'bounce_stun':              // 弹开眩晕环 r0 → r1
+        this.rings.push({ x: ev.x, y: ev.y, life: FX.STUN.LIFE, maxLife: FX.STUN.LIFE,
+                          r0: FX.STUN.R0, r1: FX.STUN.R1 });
+        break;
+      case 'guard_halo':               // 常驻附着光圈：attach / detach
+        if (ev.action === 'attach') this.halos.push({ owner: ev.owner, t: 0, color: ev.color || CONFIG.COLOR.PLAYER });
+        else this.halos = this.halos.filter((h) => h.owner !== ev.owner);  // 0 帧残留
+        break;
+      case 'miss':
+        this.shake = Math.max(this.shake, CONFIG.SHAKE.MISS);
+        break;
+      case 'guard_denied':             // 防抖期负反馈：灰闪
+        this._spawn(ev.x, ev.y, 0, 0, FX.DENY.LIFE, CONFIG.BALL.R + FX.DENY.SIZE_PAD,
+                    FX.DENY.COLOR, 'ghost');
+        break;
+      case 'ambient': {                // v2.0 主菜单氛围：缓慢漂浮光球（≤40 枚，menu.md §6）
+        if (this.ambientAlive >= 40) break;
+        const x = Math.random() * CONFIG.VIEW.W;
+        const y = CONFIG.VIEW.H + 10;
+        this._spawn(x, y, (Math.random() - 0.5) * 12, -(8 + Math.random() * 22),
+                    4 + Math.random() * 4, 2 + Math.random() * 2.5,
+                    Math.random() < 0.7 ? CONFIG.COLOR.PLAYER : CONFIG.COLOR.GHOST, 'ambient');
+        this.ambientAlive++;
+        break;
+      }
+      default: break;
+    }
+  }
+  _spawn(x, y, vx, vy, life, size, color, kind) {
+    const p = this._alloc(kind);
+    if (!p) return null;
+    p.init(x, y, vx, vy, life, size, color);
+    p.kind = kind;
+    if (kind === 'trail') p.alpha = CONFIG.FX.TRAIL.ALPHA;
+    if (kind === 'ambient') p.alpha = 0.22;
+    return p;
+  }
+
+  flush() {                            // Game 帧末调用：队列 → 发射
+    this.lastEmitted = this.queue.map((ev) => ({ ...ev }));   // v3.1：联机广播源（HostRoom 逐帧读取，浅拷贝防引用逃逸）
+    for (const ev of this.queue) this.emit(ev);
+    this.queue.length = 0;
+  }
+
+  update(dt) {
+    for (const p of this.pool) {
+      if (!p.alive) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.alive = false; if (p.kind === 'ambient') this.ambientAlive--; continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+    }
+    for (let i = this.afterimages.length - 1; i >= 0; i--) {
+      this.afterimages[i].life -= dt;
+      if (this.afterimages[i].life <= 0) this.afterimages.splice(i, 1);
+    }
+    for (let i = this.speedlines.length - 1; i >= 0; i--) {
+      this.speedlines[i].life -= dt;
+      if (this.speedlines[i].life <= 0) this.speedlines.splice(i, 1);
+    }
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      this.rings[i].life -= dt;
+      if (this.rings[i].life <= 0) this.rings.splice(i, 1);
+    }
+    for (const h of this.halos) h.t += dt;           // 呼吸相位推进
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * (CONFIG.SHAKE.DEATH / CONFIG.SHAKE.DECAY));
+  }
+
+  render(ctx) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';        // 加法混合
+    for (const p of this.pool) {
+      if (!p.alive) continue;
+      const a = (p.alpha !== undefined ? p.alpha : 1) * (p.life / p.maxLife);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (p.kind === 'ghost' ? 1 : p.life / p.maxLife + 0.3), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // I-40 冲撞残影：球体轮廓快照，alpha 0.5/0.35/0.2 → 250ms 内整体渐隐
+    for (const a of this.afterimages) {
+      ctx.globalAlpha = a.alpha * (a.life / a.maxLife);
+      ctx.fillStyle = a.color;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // I-40 起手速度线：自球心向外放射的短亮线，2 帧内渐隐
+    for (const l of this.speedlines) {
+      const k = l.life / l.maxLife;
+      ctx.globalAlpha = k * 0.8;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(l.x + Math.cos(l.ang) * 18, l.y + Math.sin(l.ang) * 18);
+      ctx.lineTo(l.x + Math.cos(l.ang) * (18 + l.len), l.y + Math.sin(l.ang) * (18 + l.len));
+      ctx.stroke();
+    }
+    // 冲击环 r0→r1（死亡爆裂 / 格挡眩晕 / 对撞弹开共用通道）
+    for (const ring of this.rings) {
+      const k = 1 - ring.life / ring.maxLife;
+      ctx.globalAlpha = ring.life / ring.maxLife;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(ring.x, ring.y, lerp(ring.r0, ring.r1, k), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // guard_halo：呼吸光圈 r16→22（周期 800ms），透明度 0.5±0.15，附着读取实时位置
+    for (const h of this.halos) {
+      const rr = 19 + 3 * Math.sin(h.t * Math.PI * 2 / 0.8);
+      ctx.globalAlpha = 0.5 + 0.15 * Math.sin(h.t * Math.PI * 2 / 0.8);
+      ctx.strokeStyle = h.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(h.owner.x, h.owner.y, rr, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();                                   // 控制 #9：用完还原
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ============================================================
+ * §8 Audio —— Web Audio 振荡器合成（无资产，首次交互后 lazy init）
+ * ============================================================ */
+class AudioBus {
+  constructor() { this.ctx = null; }
+  init() {                             // 必须在首次 pointerdown 后调用（控制 #7）
+    if (this.ctx) {
+      /* v3.0 iOS：切后台/锁屏后 ctx 变 suspended，touchend 解锁通道每次尝试 resume */
+      if (this.ctx.state === 'suspended' && this.ctx.resume) this.ctx.resume();
+      return;
+    }
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { this.ctx = null; }
+  }
+  play(name) {
+    if (!this.ctx) return;
+    const spec = {
+      charge: { f0: 620, f1: 180, dur: 0.10, type: 'square',  gain: 0.05 },
+      guard:  { f0: 300, f1: 700, dur: 0.09, type: 'sine',    gain: 0.06 },
+      break:  { f0: 500, f1: 120, dur: 0.25, type: 'sawtooth',gain: 0.07 },  // 碎盾
+      death:  { f0: 200, f1: 40,  dur: 0.45, type: 'sawtooth',gain: 0.09 },
+      banner: { f0: 90,  f1: 70,  dur: 0.60, type: 'sine',    gain: 0.10 },  // 低频音
+      deny:   { f0: 140, f1: 120, dur: 0.08, type: 'square',  gain: 0.04 },
+    }[name];
+    if (!spec) return;
+    const t0 = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = spec.type;
+    osc.frequency.setValueAtTime(spec.f0, t0);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(1, spec.f1), t0 + spec.dur);
+    g.gain.setValueAtTime(spec.gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + spec.dur);
+    osc.connect(g).connect(this.ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + spec.dur);
+  }
+}
+
+/* ============================================================
+ * §9 Progression & GhostStore —— 计数阈值 / 本地存储（v2.0）
+ * 控制 #16：本地池计数逻辑与服务端语义同构（同一套阈值函数，二期复用）
+ * 计数语义唯一真源：progression.md §2（defeatedPlayers / challengedSuccess / everBeaten）
+ * ============================================================ */
+
+/* 条目阈值裁决（纯函数；本地与服务端 /report 共用同一语义） */
+function selfOutcome(counters) {
+  return counters.defeatedPlayers >= CONFIG.THRESHOLDS.SELF_PROMOTE ? 'promote' : 'stay';
+}
+function bossSoloOutcome(counters) {
+  return counters.challengedSuccess >= CONFIG.THRESHOLDS.BOSS_SOLO_DELETE ? 'delete' : 'stay';
+}
+
+/* —— 业务进展应用（GameScreen 与单测共用；remote 模式二期换 /report，语义不变） —— */
+
+/* 挑战自我·胜利：当前关替换为胜利 replay（新幽灵计数归零）+ 第 N+1 关占位 */
+function onSelfWin(store, level, victoryReplay) {
+  const entry = store.list('self')[level - 1];
+  if (!entry) return { nextLevel: null };
+  store.replace('self', entry.id, victoryReplay);
+  const next = level + 1;
+  if (store.list('self').length < next) store.put('self', victoryReplay, {});   // 占位规则
+  if (next > store.getProgress('self').unlockedLevel) store.setUnlocked('self', next);
+  store.incProgress('self', 1);
+  store.incWin('self');
+  return { nextLevel: next };
+}
+
+/* 挑战自我·失败：entry.defeatedPlayers +1；达 20 → 晋级单机boss + 受害者 replay 顶替槽位 */
+function onSelfLose(store, level, victimReplay) {
+  const entry = store.list('self')[level - 1];
+  if (!entry) return { promoted: false, defeated: 0, bossLevel: null };
+  entry.counters.defeatedPlayers += 1;
+  const defeated = entry.counters.defeatedPlayers;
+  let promoted = false, bossLevel = null;
+  if (selfOutcome(entry.counters) === 'promote') {
+    bossLevel = store.list('boss_solo').length + 1;      // 追加为单机boss最新关
+    store.put('boss_solo', deserializeReplay(entry.payload), {});
+    store.replace('self', entry.id, victimReplay);       // 槽位由第 20 个受害者顶替（非清空）
+    promoted = true;
+  }
+  store.incLoss('self');
+  store.persist('self');
+  return { promoted, defeated, bossLevel };
+}
+
+/* 单机boss·胜利：challengedSuccess +1；达 20 → 删除，后续关顺位前移（计数随条目走） */
+function onBossSoloWin(store, level) {
+  const entries = store.list('boss_solo');
+  const entry = entries[level - 1];
+  if (!entry) return { deleted: false, poolEmpty: true, nextLevel: null, challenged: 0 };
+  entry.counters.challengedSuccess += 1;
+  const challenged = entry.counters.challengedSuccess;
+  let deleted = false;
+  if (bossSoloOutcome(entry.counters) === 'delete') {
+    store.remove('boss_solo', entry.id);
+    deleted = true;
+  }
+  store.incProgress('boss_solo', 1);
+  store.incWin('boss_solo');
+  store.persist('boss_solo');
+  const remaining = store.list('boss_solo').length;
+  const nextLevel = deleted ? (level <= remaining ? level : null)     // 顺位前移：原 K+1 变 K
+                            : (level + 1 <= entries.length ? level + 1 : null);
+  return { deleted, poolEmpty: remaining === 0, nextLevel, challenged };
+}
+
+/* 单机boss·失败：defeatedPlayers +1（仅计数，无上限） */
+function onBossSoloLose(store, level) {
+  const entry = store.list('boss_solo')[level - 1];
+  if (entry) entry.counters.defeatedPlayers += 1;
+  store.incLoss('boss_solo');
+  store.persist('boss_solo');
+  return { defeated: entry ? entry.counters.defeatedPlayers : 0 };
+}
+
+/* v2.1 播种（level-flow.md v2.1 §B）：仅第 2 关胜利 replay 播种挑战自我第 1 关。
+ * v3.0：联机池播种随联机三池作废而删除（seedRemote no-op 移除）。 */
+function seedOnLevelWin(store, levelN, winReplay) {
+  if (levelN !== 2) return false;
+  if (store.list('self').length === 0) {
+    store.put('self', winReplay, {});
+    return true;
+  }
+  return false;
+}
+
+/* 灰显判定（menu.md v3.0：五项 IA——AI 菜单项随用户指令删除，OrbAI 保留为控制台 API；
+ * 联机对战可点进入骨架屏（配对联机开发中）；单机boss 池空灰） */
+function isModeAvailable(mode, store) {
+  if (mode === 'solo' || mode === 'self' || mode === 'online' || mode === 'quit') return true;
+  if (mode === 'boss_solo') return store.list('boss_solo').length > 0;
+  return false;
+}
+
+/* HUD 文案（menu.md 原文逐字；v3.0 联机三池文案随模式删除） */
+function hudLines(mode, counters) {
+  const c = counters || { defeatedPlayers: 0, challengedSuccess: 0 };
+  switch (mode) {
+    case 'boss_solo':   return ['被挑战成功数：' + c.challengedSuccess + '/20', '已打败玩家数：' + c.defeatedPlayers];
+    case 'self':        return ['已打败玩家数：' + c.defeatedPlayers + '/20'];
+    default:            return [];
+  }
+}
+
+/* GhostStore 双实现同接口（ADR-006）：list/pickRandom/put/replace/remove/incProgress/getProgress
+ * 本地实现：localStorage 键前缀 'gd.<mode>.'（条目结构 modes.md §8.4），QuotaExceeded 淘汰护栏 */
+class LocalGhostStore {
+  constructor() {
+    this.mem = {};                      // localStorage 不可用（隐私模式）→ 内存态降级
+    this.ls = null;
+    try {
+      const probe = 'gd.__probe';
+      window.localStorage.setItem(probe, '1');
+      window.localStorage.removeItem(probe);
+      this.ls = window.localStorage;
+    } catch (e) { this.ls = null; }
+    this.persistent = !!this.ls;
+    this.cache = {};                    // 常驻内存工作副本（list 返回活对象，业务可直接改计数）
+  }
+  _key(mode) { return 'gd.' + mode + '.data'; }
+  _empty() { return { entries: [], unlockedLevel: 1, progress: 0, wins: 0, losses: 0 }; }
+  _load(mode) {
+    if (this.cache[mode]) return this.cache[mode];
+    let data = this._empty();
+    try {
+      const raw = this.ls ? this.ls.getItem(this._key(mode)) : this.mem[this._key(mode)];
+      if (raw) data = JSON.parse(raw);
+    } catch (e) { data = this._empty(); }
+    this.cache[mode] = data;
+    return data;
+  }
+  _save(mode) {
+    const raw = JSON.stringify(this.cache[mode]);
+    try {
+      if (this.ls) this.ls.setItem(this._key(mode), raw);
+      else this.mem[this._key(mode)] = raw;
+    } catch (e) {
+      // QuotaExceededError：按 uploadedAt 淘汰最旧条目后重试（架构 §2 容量护栏）
+      const data = this.cache[mode];
+      if (data.entries.length > 0) {
+        data.entries.sort((a, b) => ((a.meta && a.meta.uploadedAt) || 0) - ((b.meta && b.meta.uploadedAt) || 0));
+        const dropped = data.entries.shift();
+        console.warn('[GhostStore] quota exceeded, evicted oldest:', dropped && dropped.id);
+        this._save(mode);
+      }
+    }
+  }
+  _counters(mode) {
+    return mode === 'self' ? { defeatedPlayers: 0 }
+         : mode === 'boss_solo' ? { challengedSuccess: 0, defeatedPlayers: 0 }
+         : { defeatedPlayers: 0, challengedSuccess: 0 };
+  }
+  list(mode) { return this._load(mode).entries; }
+  pickRandom(mode) {
+    const es = this.list(mode);
+    if (es.length === 0) return null;
+    const e = es[Math.floor(Math.random() * es.length)];
+    return { id: e.id, replay: deserializeReplay(e.payload) };
+  }
+  put(mode, replay, meta) {
+    const data = this._load(mode);
+    const id = 'e' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+    data.entries.push({
+      id,
+      payload: serializeReplay(replay),
+      meta: { duration: replay.duration || 0, uploadedAt: Date.now(), ...(meta || {}) },
+      counters: this._counters(mode),
+    });
+    this._save(mode);
+    return id;
+  }
+  replace(mode, id, replay) {
+    const data = this._load(mode);
+    const e = data.entries.find((x) => x.id === id);
+    if (!e) return { ok: false, stale: true };        // CAS 语义预留：远程实现映射 stale 分支
+    e.payload = serializeReplay(replay);
+    e.meta = { duration: replay.duration || 0, uploadedAt: Date.now() };
+    e.counters = this._counters(mode);                // 新幽灵从 0 计（modes.md §5）
+    this._save(mode);
+    return { ok: true, stale: false };
+  }
+  remove(mode, id) {
+    const data = this._load(mode);
+    data.entries = data.entries.filter((x) => x.id !== id);
+    this._save(mode);
+  }
+  incProgress(mode, delta) {
+    const d = this._load(mode);
+    d.progress += delta;
+    this._save(mode);
+    return d.progress;
+  }
+  getProgress(mode) {
+    const d = this._load(mode);
+    return { progress: d.progress, wins: d.wins, losses: d.losses, unlockedLevel: d.unlockedLevel || 1 };
+  }
+  /* —— 本地扩展（wins/losses/unlockedLevel 落盘；remote 侧由 /report 原子承担） —— */
+  incWin(mode) { this._load(mode).wins += 1; this._save(mode); }
+  incLoss(mode) { this._load(mode).losses += 1; this._save(mode); }
+  setUnlocked(mode, lv) { this._load(mode).unlockedLevel = lv; this._save(mode); }
+  persist(mode) { this._save(mode); }   // Progression 直改内存计数后落盘
+}
+
+
+/* ============================================================
+ * §9.5 OrbAI —— AI 输入管道（ADR-009：AI 输入与人类同通路）
+ * ai-interface.md v3.0：AIInput implements Input 同接口；think() 决策
+ * 消费冻结快照（Match.snapshotView），异常降级空输入不判负。
+ * ============================================================ */
+/* ---------- AIInput：每 tick 首先被 beginTick 喂入世界快照，决策缓存供本帧消费 ---------- */
+class AIInput {
+  /* impl: {name, think(state)}；seat: 'P1'|'P2'（快照视角） */
+  constructor(impl, seat) {
+    this.impl = impl; this.seat = seat;
+    this._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+    this._clickConsumed = false;
+  }
+  /* Match.update 顶部调用（逻辑更新前 = 上一帧末世界状态；本 tick 输入消费前就绪） */
+  beginTick(match) {
+    this._clickConsumed = false;
+    try {
+      const snap = match.snapshotView(this.seat);
+      const d = this.impl.think(snap);
+      this._dec = {
+        move: d && d.move ? { x: d.move.x || 0, y: d.move.y || 0 } : { x: 0, y: 0 },
+        click0: !!(d && d.click0),
+        guardHeld: !!(d && d.guardHeld),
+      };
+    } catch (err) {
+      /* ADR-009：AI 异常 = 空输入 + 控制台告警，不判负不崩局 */
+      console.warn('[OrbAI] ' + (this.impl.name || 'ai') + ' think() 异常，本帧空输入：', err);
+      this._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+    }
+  }
+  getMoveAxis() { return this._dec.move; }
+  /* 冲撞方向 = move 决策向量（AI 的移动即意图）；零向量交给 Player 层「朝对手」兜底 */
+  getChargeDir() {
+    const m = this._dec.move;
+    if (m.x !== 0 || m.y !== 0) return norm(m.x, m.y);
+    return { x: 0, y: 0 };
+  }
+  consumeClick(btn) {                   // click0 一次消费（同帧重复请求无效）
+    if (btn !== 0) return false;
+    if (this._clickConsumed) return false;
+    this._clickConsumed = true;
+    return this._dec.click0;
+  }
+  guardHeld() { return this._dec.guardHeld; }
+  isDown() { return false; }            // AI 无按键语义（KeyR 等仅人类）
+  endFrame() {}                         // no-op（click0 生命周期由 beginTick 重置）
+}
+
+/* ---------- 内置示例 AI：追踪 + 距离<220 且对手非无敌时冲撞；对手起手 30% 概率举盾 500ms ---------- */
+function createBuiltinAI() {
+  let guardUntil = 0;
+  return {
+    name: '内置示例',
+    think(state) {
+      const dx = state.opp.x - state.self.x, dy = state.opp.y - state.self.y;
+      const dist = Math.hypot(dx, dy);
+      const move = dist > 1 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+      const oppVulnerable = state.opp.phase === 'IDLE' || state.opp.phase === 'CHARGE_ACTIVE';
+      const click0 = dist < 220 && oppVulnerable;
+      if (state.opp.phase === 'CHARGE_WINDUP' && Math.random() < 0.3) {
+        guardUntil = state.tick + 30;             // 500ms ≈ 30 tick
+      }
+      const guardHeld = state.tick < guardUntil;
+      return { move, click0, guardHeld };
+    },
+  };
+}
+
+/* ---------- 用户 AI 代码编译：new Function 包装 + think 校验（window.OrbAI 'code' spec 用） ---------- */
+function compileAICode(code) {
+  let obj;
+  try {
+    obj = new Function('return (' + code + ')')();
+  } catch (err) {
+    throw new Error('AI 代码语法错误：' + err.message);
+  }
+  if (!obj || typeof obj.think !== 'function') {
+    throw new Error('AI 代码必须提供 think(state) 函数');
+  }
+  return obj;
+}
+
+/* ============================================================
+ * §10 Match —— 对局（原 Game 对局部分降级，由 GameScreen 持有；
+ * 屏幕层在外、对局层在内，架构 v2.0 §1）
+ * ============================================================ */
+class Match {
+  /* deps: {input, fx, audio}
+   * cfg: {mode, opp:'dummy'|'ghost'|'pvp', replay?, onEnd(result, replay, seconds),
+   *       onLevelWin(levelN, winReplay),
+   *       p1Input?, p2Input?, timeLimit?}   ← v3.0：输入源注入（无头化 §1.3）+ demo 对局时限 */
+  constructor(deps, cfg) {
+    this.input = deps.input; this.fx = deps.fx; this.audio = deps.audio;
+    this.mode = cfg.mode;
+    this.opp = cfg.opp;
+    this.cfgReplay = cfg.replay || null;     // 非 solo 模式的幽灵 replay（来自 store）
+    this.onEnd = cfg.onEnd || (() => {});
+    this.onLevelWin = cfg.onLevelWin || (() => {});
+    /* v3.0 无头化：输入源注入（人类 Input / AIInput 同通路，ADR-009）。
+     * demo 形态：P1/P2 各持输入源；单机形态：P1 = deps.input */
+    this.p1Input = cfg.p1Input || deps.input;
+    this.p2Input = cfg.p2Input || this.p1Input;
+    this.timeLimit = cfg.timeLimit || 300;   // demo 单局上限 5 分钟（ai-interface.md §6.2）
+    this.ended = false;
+
+    this.player = null; this.p2 = null; this.dummy = null; this.ghost = null;
+    this.mirrorReplay = null;          // 第 1 关（教学）录制段 → 第 2 关幽灵来源
+    this.lastWinReplay = null;         // v2.1 无限链：第 N 关胜利段 → 第 N+1 关幽灵（N≥2）
+    this.recorder = new Recorder();    // Recorder 全局化：按对局尝试分段，仅胜利段作幽灵源
+    /* v2.3 镜像复刻：offset = 幽灵出生点 − 镜像后玩家出生点（CONFIG 推导，勿硬编码；
+     * 镜像变换 x'=1280−x 已把玩家轨迹映射到幽灵侧，推导结果 = (0,0)） */
+    this.offset = {
+      x: CONFIG.SPAWN.GHOST.x - (CONFIG.VIEW.W - CONFIG.SPAWN.PLAYER.x),
+      y: CONFIG.SPAWN.GHOST.y - CONFIG.SPAWN.PLAYER.y,
+    };
+
+    this.levelN = 1;                   // v2.1 无限关卡链：当前第 N 关
+    this.level = 'PLAY';               // PLAY / AUTO_ADVANCE / DEATH / VICTORY / DRAW(dormant)
+    this.bannerTimer = 0;              // AUTO_ADVANCE 与 DRAW 共用通道
+    this.hitstopTimer = 0;
+    this.slowTimer = 0;                // 死亡慢放
+    this.tick = 0;                     // 对局内相对 tick（0-based，进屏清零，控制 #11）
+    this.matchTime = 0;                // 本关用时（秒）
+    this._endTimer = 0;                // VICTORY 定格 → finish（self/boss 单关结算）
+    this.prevR = false;
+    this._prevPhaseP = 'IDLE'; this._prevPhaseG = 'IDLE';
+    this._hpFlashP = 0; this._hpFlashG = 0;   // 血条熄灭格闪红 150ms
+    this._hitFlashP = 0; this._hitFlashG = 0; // 受击白闪 80ms / 对撞白闪 60ms
+    this.start();
+  }
+
+  /* ---------- 状态迁移 ---------- */
+  start() {
+    if (this.mode === 'demo') { this.enterDemo(); return; }   // v3.0：PVP 对局（零 Recorder/GhostPlayer）
+    this.recorder.begin();             // 对局开始即录制（按尝试分段）
+    this.enterLevel(1);
+  }
+  /* v3.0 demo 对局（人机 / AI-vs-AI 演示 / 二期联机权威模拟同形态）：
+   * P1 (230,360) vs P2 (1050,360)，固定站位，无幽灵无录制（modes.md v3.0 §A） */
+  enterDemo() {
+    this.player = new Player(CONFIG.SPAWN.PLAYER.x, CONFIG.SPAWN.PLAYER.y);
+    this.p2 = new Player(CONFIG.SPAWN.GHOST.x, CONFIG.SPAWN.GHOST.y);
+    this.player.combat.onAction = (type, ang) =>
+      this.audio.play(type === 'guard_begin' ? 'guard' : 'charge');
+    this.p2.combat.onAction = (type, ang) =>
+      this.audio.play(type === 'guard_begin' ? 'guard' : 'charge');
+    this.dummy = null; this.ghost = null;
+    this.recorder.reset();             // demo 不录制（recording 未 begin，sample/recordAction no-op）
+    this.tick = 0; this.matchTime = 0;
+    this.hitstopTimer = this.slowTimer = this._endTimer = 0;
+    this._hpFlashP = this._hpFlashG = this._hitFlashP = this._hitFlashG = 0;
+    this._prevPhaseP = this._prevPhaseG = 'IDLE';
+    this.level = 'PLAY';
+  }
+  /* 动作录制+播音统一绑定（t = recorder.tickCount，段内单调、与轨迹帧严格对齐；
+   * enterLevel 重建 Player 后必须重绑，否则漏录） */
+  _bindPlayerAction(player) {
+    player.combat.onAction = (type, ang) => {
+      // 控制 #11：事件 t 与轨迹帧同源——取 Recorder 自身帧计数（sample 前即当前待写帧号）
+      this.recorder.recordAction(type, ang, this.recorder.tickCount);
+      this.audio.play(type === 'guard_begin' ? 'guard' : 'charge');
+    };
+  }
+  /* v2.1 无限关卡链 + v2.2 固定站位：进入第 n 关（1=教学木桩，≥2=镜像幽灵）。
+   * 每次尝试（进入/重试）为新录制段：recorder.reset() 丢弃上段；幽灵数据不变（重打同源）。
+   * 幽灵来源（ServeProvider 泛化，无新接口）：
+   *   solo 第 2 关 = 教学段录制；solo 第 3 关起 = 上一关胜利段；非 solo = cfgReplay */
+  enterLevel(n) {
+    this.levelN = n;
+    this.player = new Player(CONFIG.SPAWN.PLAYER.x, CONFIG.SPAWN.PLAYER.y);   // 恒 (230,360)
+    this._bindPlayerAction(this.player);
+    this.dummy = null; this.ghost = null;
+    let replay = null;
+    if (this.opp === 'dummy') {
+      if (n === 1) {
+        this.dummy = new Dummy(CONFIG.SPAWN.DUMMY.x, CONFIG.SPAWN.DUMMY.y);   // 木桩 (1050,360) HP=3
+      } else {
+        replay = (n === 2) ? this.mirrorReplay : this.lastWinReplay;
+      }
+    } else {
+      replay = this.cfgReplay;
+    }
+    if (replay) this.ghost = new GhostPlayer(replay, this.offset.x, this.offset.y);
+    this.recorder.reset();             // 新尝试段从帧 0 起录（失败段/上关段不混入）
+    this.tick = 0;                     // 回放 tick 轴归零（与录制段同长度）
+    this.matchTime = 0;
+    this.hitstopTimer = this.slowTimer = this._endTimer = 0;
+    this._hpFlashP = this._hpFlashG = this._hitFlashP = this._hitFlashG = 0;
+    this._prevPhaseP = this._prevPhaseG = 'IDLE';
+    this.level = 'PLAY';
+  }
+
+  /* ---------- 命中判定：HitResolver 三步原子裁决（控制 #10/#15）+ v2.2 命中矩阵 ---------- */
+  resolveHits() {
+    if (this.opp === 'dummy' && this.levelN === 1) {   // 第 1 关木桩（HP=3，命中 3 次击碎）
+      const r = checkChargeHit(this.player, this.dummy);
+      if (r === 'hit') {
+        this.player.combat._hitVictims.add(this.dummy);
+        const res = this.dummy.combat.hit();           // −1 HP，归 0 才死
+        if (res === 'dead') this._onOpponentDead(this.dummy, this.levelN);   // → AUTO_ADVANCE
+        else this._onNonLethalHit(this.dummy, 'G');
+      }
+      return;
+    }
+    // v3.0 demo：P2（Player 实体）承载 ghost 变量位，复用对称裁决
+    const g = this.ghost || this.p2;
+    if (!g) return;
+    const p = this.player;
+
+    // Step1 收集（只读，对称顺序，不产生副作用）
+    const events = [];
+    const r1 = checkChargeHit(p, g);
+    if (r1) events.push({ attacker: p, defender: g, kind: r1 });
+    const r2 = checkChargeHit(g, p);
+    if (r2) events.push({ attacker: g, defender: p, kind: r2 });
+
+    // Step2 裁决（本步内原子完成，禁止跨帧分判）
+    const verdict = adjudicate(events);
+    if (verdict.type === 'none') return;
+
+    // Step3 分配：先写相位，后推 fx（控制 #10：副作用不得先行）
+    if (verdict.type === 'clash') {                // v2.2 对撞弹开：双方不掉血，各 300ms
+      const a = verdict.a, b = verdict.b;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const L = len(dx, dy) || 1;
+      const ux = dx / L, uy = dy / L;
+      a.combat.clash({ x: -ux, y: -uy });          // 沿连线互相弹开（弹开含碰撞分离）
+      b.combat.clash({ x: ux, y: uy });
+      this.fx.queue.push({ type: 'clash_ring', x: a.x, y: a.y });
+      this.fx.queue.push({ type: 'clash_ring', x: b.x, y: b.y });
+      this._hitFlashP = Math.max(this._hitFlashP, CONFIG.CLASH.FLASH);   // 双方白闪 60ms
+      this._hitFlashG = Math.max(this._hitFlashG, CONFIG.CLASH.FLASH);
+      this.fx.shake = Math.max(this.fx.shake, CONFIG.SHAKE.COLLIDE);     // v1.1 对撞重震 10px 恢复
+    } else if (verdict.type === 'win') {           // 有效命中：目标 −1 HP
+      const loser = verdict.loser, winner = verdict.winner;
+      winner.combat._hitVictims.add(loser);
+      const res = loser.combat.hit();
+      if (res === 'dead') {
+        if (this.mode === 'demo') {              // v3.0：demo 击杀 → 对局结束（无关卡链）
+          this.endDemo(loser === p ? 'P2' : 'P1', loser);
+        } else if (loser === p) {
+          this.fx.queue.push({ type: 'burst', x: p.x, y: p.y, color: CONFIG.COLOR.PLAYER });
+          this.audio.play('death');
+          this.hitstopTimer = CONFIG.HITSTOP;
+          this.slowTimer = CONFIG.DEATH_SLOW.DUR;  // 死亡慢放 1.0s @0.3
+          this.level = 'DEATH';
+        } else {
+          this.fx.queue.push({ type: 'burst', x: g.x, y: g.y, color: CONFIG.COLOR.GHOST });
+          this.audio.play('death');
+          this.hitstopTimer = CONFIG.HITSTOP;
+          this._onOpponentDead(g, this.levelN);    // solo → AUTO_ADVANCE；self/boss → VICTORY
+        }
+      } else {
+        this._onNonLethalHit(loser, loser === p ? 'P' : 'G');   // 受击反馈：白闪+微震+血条红闪
+      }
+    } else if (verdict.type === 'guard') {         // 格挡成功：攻击者弹开 400ms，防御者碎盾（冷却 3s）
+      verdict.attacker.combat.bounce();
+      verdict.defender.combat.releaseGuard('block');
+      this.fx.queue.push({ type: 'shield_break', x: verdict.defender.x, y: verdict.defender.y });
+      this.audio.play('break');
+      this.hitstopTimer = Math.max(this.hitstopTimer, CONFIG.GUARD_HITSTOP);
+    } else if (verdict.type === 'ineffective') {   // 打在无敌起手上：不掉血不弹开（v1.1 无专属特效）
+      verdict.attacker.combat._hitVictims.add(verdict.defender);
+    }
+  }
+
+  /* 对手 HP 归 0：solo 无限链 → AUTO_ADVANCE（仅第 2 关胜利段播种）；self/boss → VICTORY 结算 */
+  _onOpponentDead(opponent, levelN) {
+    if (this.mode === 'solo') {
+      const winReplay = this.recorder.snapshot();  // 本关胜利段（尝试段闭合快照）
+      if (levelN === 1) this.mirrorReplay = winReplay;    // 教学段 → 第 2 关幽灵
+      else this.lastWinReplay = winReplay;                // 第 N 关胜利段 → 第 N+1 关幽灵
+      this.onLevelWin(levelN, winReplay);          // 播种通道（GameScreen 仅消费第 2 关）
+      this.level = 'AUTO_ADVANCE';
+      this.bannerTimer = CONFIG.BANNER.ADVANCE_DUR;
+    } else {
+      this.level = 'VICTORY';
+      this._endTimer = CONFIG.VICTORY_DELAY;       // 定格后 → finish('win') → RESULT
+    }
+    this.audio.play('banner');
+  }
+
+  /* 非致死有效命中：受击白闪 80ms + 微震 3px + 血条熄灭格闪红 150ms（fx.md v2.2 §A） */
+  _onNonLethalHit(victim, side) {
+    this.fx.shake = Math.max(this.fx.shake, CONFIG.SHAKE.HIT);
+    if (side === 'P') { this._hitFlashP = Math.max(this._hitFlashP, CONFIG.HIT.FLASH);
+                        this._hpFlashP = Math.max(this._hpFlashP, CONFIG.HPBAR.RED_FLASH); }
+    else { this._hitFlashG = Math.max(this._hitFlashG, CONFIG.HIT.FLASH);
+           this._hpFlashG = Math.max(this._hpFlashG, CONFIG.HPBAR.RED_FLASH); }
+  }
+
+  /* ---------- 特效钩子：相位迁移检测（逻辑期只入队） ---------- */
+  fxHooks() {
+    const trans = (ent, prev, color) => {
+      const cur = ent.combat.phase;
+      if (prev !== 'CHARGE_WINDUP' && cur === 'CHARGE_WINDUP') {
+        this.fx.queue.push({ type: 'charge_speedlines', x: ent.x, y: ent.y, ang: ent.facing });   // I-40 起手速度线
+      }
+      if (prev !== 'CHARGE_ACTIVE' && cur === 'CHARGE_ACTIVE') {
+        this.fx.queue.push({ type: 'charge_afterimages', x: ent.x, y: ent.y, ang: ent.facing,
+                             r: ent.r, color });   // I-40 冲撞残影 3 段（v1.0 特效风格）
+      }
+      if (prev !== 'BOUNCE' && cur === 'BOUNCE') {
+        this.fx.queue.push({ type: 'bounce_stun', x: ent.x, y: ent.y });
+      }
+      if (prev !== 'GUARD' && cur === 'GUARD') {
+        this.fx.queue.push({ type: 'guard_halo', owner: ent, action: 'attach', color });
+      }
+      if (prev === 'GUARD' && cur !== 'GUARD') {
+        this.fx.queue.push({ type: 'guard_halo', owner: ent, action: 'detach' });  // 0 帧残留
+      }
+      if (prev === 'CHARGE_ACTIVE' && cur === 'CHARGE_RECOVERY' &&
+          ent.combat._hitVictims.size === 0) {
+        this.fx.queue.push({ type: 'miss', x: ent.x, y: ent.y });   // v2.1 挥空轻震 2px（命中不震）
+      }
+      return cur;
+    };
+    if (this.player && this.player.combat) this._prevPhaseP = trans(this.player, this._prevPhaseP, CONFIG.COLOR.PLAYER);
+    if (this.ghost) this._prevPhaseG = trans(this.ghost, this._prevPhaseG, CONFIG.COLOR.GHOST);
+    if (this.p2) this._prevPhaseG = trans(this.p2, this._prevPhaseG, CONFIG.COLOR.GHOST);   // v3.0 demo：P2 走 ghost 侧特效通道
+  }
+
+  /* ---------- 固定步逻辑更新 ---------- */
+  update(dt) {
+    // v3.0 ADR-009：AI 快照时序——逻辑更新前生成（= 上一帧末世界状态），本 tick 输入消费前就绪
+    if (this.mode === 'demo') {
+      for (const inp of [this.p1Input, this.p2Input]) {
+        if (inp && typeof inp.beginTick === 'function') inp.beginTick(this);
+      }
+    }
+
+    // 控制 #5：timeScale 只在此处乘一次
+    let scale = 1;
+    if (this.hitstopTimer > 0) { this.hitstopTimer -= dt; scale = 0; }
+    else if (this.slowTimer > 0) { this.slowTimer -= dt; scale = Math.min(scale, this.slowTimer > 0 ? CONFIG.DEATH_SLOW.SCALE : 1); }
+    const effDt = dt * scale;
+
+    const rDown = this.input.isDown('KeyR');
+    const rPressed = rDown && !this.prevR;
+    this.prevR = rDown;
+
+    // 受击/对撞白闪、血条红闪计时（渲染层指示，不冻结：血条熄灭闪烁随真实时间走）
+    this._hitFlashP = Math.max(0, this._hitFlashP - dt);
+    this._hitFlashG = Math.max(0, this._hitFlashG - dt);
+    this._hpFlashP = Math.max(0, this._hpFlashP - dt);
+    this._hpFlashG = Math.max(0, this._hpFlashG - dt);
+
+    switch (this.level) {
+      case 'PLAY': {
+        this.matchTime += dt;
+        if (this.mode === 'demo') {
+          /* v3.0 demo 对局：双输入源同通路（ADR-009），无录制无播种 */
+          this.player.update(effDt, this.p1Input, this);
+          this.p2.update(effDt, this.p2Input, this);
+          resolveOverlap(this.player, this.p2);
+          this.resolveHits();
+          if (!this.ended && this.matchTime >= this.timeLimit) {   // §6.2 超时：HP 多者胜 / 同 HP DRAW
+            const hpP = this.player.combat.hp, hpG = this.p2.combat.hp;
+            this.endDemo(hpP > hpG ? 'P1' : hpG > hpP ? 'P2' : null, null);
+          }
+        } else {
+          this.player.update(effDt, this.input, this);
+          if (this.ghost) this.ghost.update(this.tick, effDt, this);   // 回放 tick = Match.tick
+          if (this.dummy || this.ghost) {
+            const foe = this.ghost || this.dummy;
+            resolveOverlap(this.player, foe);   // v2.2 E：实体碰撞软推挤（判定圈随实际球心）
+          }
+          this.recorder.sample(this.player.x, this.player.y);   // 尝试段采样（控制 #11）
+          this.resolveHits();
+        }
+        this.tick++;
+        break;
+      }
+
+      case 'AUTO_ADVANCE':             // v2.1 无限链：击杀帧 → hitstop+爆裂已结算 → 1.2s 横幅自动推进
+        this.bannerTimer -= dt;
+        if (this.bannerTimer <= 0) this.enterLevel(this.levelN + 1);
+        break;
+
+      case 'DRAW':                     // dormant（v2.2 起同 tick 对撞已改弹开，无触发源；代码保留勿删）
+        console.assert(this.player.combat.phase === 'DEAD' && this.ghost && this.ghost.combat.phase === 'DEAD',
+                       'DRAW requires both DEAD');
+        this.bannerTimer -= dt;
+        if (this.bannerTimer <= 0) {
+          this.recorder.reset();       // 无效对局：丢弃录制段（modes.md §3.2）
+          this.enterLevel(this.levelN);
+        }
+        break;
+
+      case 'DEATH':
+        if (this.slowTimer <= 0) {
+          if (this.mode === 'solo') {                 // v2.1：R 原地重试当前关（同源幽灵、HP 重置）
+            if (rPressed) this.enterLevel(this.levelN);
+          } else if (!this.ended) {
+            this.finish('lose');       // self/boss：败局产出 replay（Recorder 全局化）
+          }
+        }
+        break;
+
+      case 'VICTORY':                  // self/boss 单关对局：定格后结算
+        this._endTimer -= dt;
+        if (this._endTimer <= 0 && !this.ended) this.finish('win');
+        break;
+
+      default: break;
+    }
+
+    this.fxHooks();
+    this.fx.flush();
+    this.fx.update(effDt);             // hitstop 期间粒子冻结（fx.md §8）
+    this.input.endFrame();
+  }
+
+  /* ---------- v3.0 ADR-009：AI 决策快照（seat = 'P1'|'P2'，self/opp 视角切换）----------
+   * 深冻结：AI 篡改快照不影响世界；guardCd = 冷却总长 − 已过时间（无盾时为 0） */
+  snapshotView(seat) {
+    const me = seat === 'P1' ? this.player : this.p2;
+    const op = seat === 'P1' ? this.p2 : this.player;
+    if (!me || !op || !me.combat || !op.combat) return null;
+    return deepFreeze({
+      tick: this.tick,
+      self: deepFreeze({
+        x: me.x, y: me.y,
+        phase: me.combat.phase,
+        hp: me.combat.hp,
+        guardCd: me.combat.phase === 'GUARD_RELEASE'
+          ? Math.max(0, me.combat._coolDur - me.combat.t) : 0,
+        chargeDir: deepFreeze({ x: Math.cos(me.facing), y: Math.sin(me.facing) }),
+      }),
+      opp: deepFreeze({
+        x: op.x, y: op.y,
+        phase: op.combat.phase,
+        hp: op.combat.hp,
+        guardCd: op.combat.phase === 'GUARD_RELEASE'
+          ? Math.max(0, op.combat._coolDur - op.combat.t) : 0,
+        chargeDir: deepFreeze({ x: Math.cos(op.facing), y: Math.sin(op.facing) }),
+      }),
+      arena: deepFreeze({
+        W: CONFIG.VIEW.W, H: CONFIG.VIEW.H,
+        BALL_R: CONFIG.BALL.R, HIT_R: CONFIG.CHARGE.HIT_R,
+        HIT_OFFSET: CONFIG.CHARGE.HIT_OFFSET,
+        CHARGE_DISTANCE: CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000,   // 168px
+      }),
+    });
+  }
+
+  /* ---------- v3.0 demo 对局收束：seat 为胜者（'P1'/'P2'），null = 超时平局 DRAW ----------
+   * 零 Recorder 产出（demo 无录制），onEnd(seat, null, matchTime) */
+  endDemo(seat, loser) {
+    if (this.ended) return;
+    this.ended = true;
+    if (loser) {   // 击杀收束：爆裂 + 死亡音 + hitstop 定格
+      this.fx.queue.push({ type: 'burst', x: loser.x, y: loser.y,
+                           color: loser === this.player ? CONFIG.COLOR.PLAYER : CONFIG.COLOR.GHOST });
+      this.audio.play('death');
+      this.hitstopTimer = CONFIG.HITSTOP;
+      if (loser.combat) loser.combat.phase = 'DEAD';
+    }
+    this.onEnd(seat, null, this.matchTime);
+  }
+
+  /* ---------- 对局收束（v2.0）：胜/负产 replay，放弃/DRAW 不产 ---------- */
+  finish(result) {
+    if (this.ended) return;
+    this.ended = true;
+    const replay = (result === 'win' || result === 'lose') ? this.recorder.finalize() : null;
+    this.onEnd(result, replay, this.matchTime);
+  }
+  abandon() {                          // ESC 放弃：录制作废、不计任何数
+    this.ended = true;
+  }
+
+  /* ---------- 渲染（rAF 主循环在 App） ---------- */
+  render(ctx) {
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+
+    // 屏幕震动：渲染层偏移（fx.md v1.1：不回写世界坐标）
+    if (this.fx.shake > 0) {
+      ctx.translate((Math.random() - 0.5) * 2 * this.fx.shake,
+                    (Math.random() - 0.5) * 2 * this.fx.shake);
+    }
+
+    // 场地边界（16px 内缩提示线）
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(CONFIG.BOUND.INSET, CONFIG.BOUND.INSET,
+                   CONFIG.VIEW.W - CONFIG.BOUND.INSET * 2, CONFIG.VIEW.H - CONFIG.BOUND.INSET * 2);
+
+    // 粒子层（lighter 混合在 FXSystem 内部 save/restore）
+    this.fx.render(ctx);
+
+    // 实体
+    if (this.dummy && this.dummy.combat.phase !== 'DEAD') this.drawBall(ctx, this.dummy, CONFIG.COLOR.GHOST, 0.9, false);
+    if (this.ghost && this.ghost.combat.phase !== 'DEAD') this.drawBall(ctx, this.ghost, CONFIG.COLOR.GHOST, 0.85, false);
+    if (this.p2 && this.p2.combat.phase !== 'DEAD') this.drawBall(ctx, this.p2, CONFIG.COLOR.GHOST, 1, false);   // v3.0 demo P2
+    if (this.player && this.player.combat && this.player.combat.phase !== 'DEAD')
+      this.drawBall(ctx, this.player, CONFIG.COLOR.PLAYER, 1, true);
+
+    // UI / 横幅
+    this.renderUI(ctx);
+    ctx.restore();
+  }
+
+  drawBall(ctx, b, color, alpha, isPlayer) {
+    let r = b.r;
+    let x = b.x, y = b.y;
+    let flash = this._hitFlash(b) > 0;          // v2.2 受击/对撞白闪（80ms / 60ms）
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // BOUNCE 眩晕：位置抖动 ±2px + 色闪（渲染层偏移，不回写逻辑坐标）
+    if (b.combat && b.combat.phase === 'BOUNCE') {
+      x += (Math.random() - 0.5) * 4;
+      y += (Math.random() - 0.5) * 4;
+      flash = flash || Math.floor(b.combat.t / (CONFIG.BOUNCE.DURATION / 6)) % 2 === 0;  // 白↔本体色 3 次/400ms
+    }
+    // 起手收缩至 85% + 蓄力描边（I-31 验收通过的保留项）
+    if (b.combat && b.combat.phase === 'CHARGE_WINDUP') {
+      r = b.r * 0.85;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, b.r + 4, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = flash ? '#fff' : color;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // v2.2 低血警示：HP=1 边缘持续微红脉动（周期 600ms）
+    if (b.combat && b.combat.maxHP && b.combat.hp === 1 && b.combat.phase !== 'DEAD') {
+      const pulse = 0.35 + 0.3 * Math.sin(performance.now() / 1000 * Math.PI * 2 / CONFIG.HIT.LOW_PULSE);
+      ctx.save();
+      ctx.globalAlpha = clamp(pulse, 0, 1);
+      ctx.strokeStyle = '#ff4d4d';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, r + 3, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  _hitFlash(b) {
+    return b === this.player ? this._hitFlashP
+         : (b === this.ghost || b === this.p2) ? this._hitFlashG
+         : b === this.dummy ? this._hitFlashG : 0;
+  }
+
+  renderUI(ctx) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    const cx = CONFIG.VIEW.W / 2;
+
+    switch (this.level) {
+      case 'PLAY':
+        if (this.mode === 'solo' && this.levelN === 1) {
+          ctx.font = '18px sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.fillText('第 1 关：撞碎木桩 —— 你做的一切都会被记住', cx, 60);
+        }
+        break;
+      case 'AUTO_ADVANCE':             // v2.1：第 2 关附副标「它学会了你」
+        this.banner(ctx, cx, this.levelN === 1 ? '第 2 关：它学会了你' : '第 ' + (this.levelN + 1) + ' 关');
+        break;
+      case 'DRAW':                     // dormant（v2.2 起无触发源；代码保留勿删）
+        this.banner(ctx, cx, '同归于尽');
+        break;
+      case 'DEATH':
+        if (this.slowTimer <= 0) {
+          ctx.font = '40px sans-serif';
+          ctx.fillText('被自己击败', cx, 330);
+          if (this.mode === 'solo') {          // v2.1：R 原地重试当前关（同源幽灵）；self/boss 交 RESULT 屏
+            ctx.font = '22px sans-serif';
+            ctx.fillStyle = 'rgba(255,255,255,0.8)';
+            ctx.fillText('R 重试', cx, 390);
+          }
+        }
+        break;
+      case 'VICTORY': {                // self/boss 单关结算
+        ctx.font = '40px sans-serif';
+        ctx.fillText('你击败了你自己', cx, 330);
+        ctx.font = '22px sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fillText('用时 ' + this.matchTime.toFixed(1) + ' 秒', cx, 390);
+        break;
+      }
+      default: break;
+    }
+
+    // v2.1「第 N 关」小字：顶部正中 x=640，仅单机挑战显示（与两侧血条/boss 进度条不重叠）
+    if (this.mode === 'solo' && (this.level === 'PLAY' || this.level === 'AUTO_ADVANCE')) {
+      ctx.font = '16px sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.65)';
+      ctx.fillText('第 ' + this.levelN + ' 关', cx, CONFIG.HPBAR.Y + 5);
+    }
+
+    // v2.2 顶部血量 UI（纯 Canvas）：玩家左组 / 对手右组（幽灵 / 木桩 / demo P2）
+    const foe = this.ghost || this.dummy || this.p2;
+    if (foe && (this.level === 'PLAY' || this.level === 'AUTO_ADVANCE' ||
+                this.level === 'DEATH' || this.level === 'VICTORY')) {
+      this.hpBar(ctx, this.player.combat, CONFIG.HPBAR.CX_P, CONFIG.COLOR.PLAYER,
+                 '你', this._hpFlashP);
+      this.hpBar(ctx, foe.combat, CONFIG.HPBAR.CX_G, CONFIG.COLOR.GHOST,
+                 this.mode === 'demo' ? 'P2' : '幽灵', this._hpFlashG);
+    }
+    ctx.restore();
+  }
+
+  /* 一组血条：3 格光条 24×10 间隔 6；满格亮，扣血格 alpha 0.15，刚扣格闪红 150ms */
+  hpBar(ctx, combat, groupCx, color, label, redFlash) {
+    const HB = CONFIG.HPBAR;
+    const total = HB.W * combat.maxHP + HB.GAP * (combat.maxHP - 1);
+    const x0 = groupCx - total / 2;
+    for (let i = 0; i < combat.maxHP; i++) {
+      const gx = x0 + i * (HB.W + HB.GAP);
+      const filled = i < combat.hp;
+      const justLost = (!filled && i === combat.hp && redFlash > 0);
+      ctx.globalAlpha = filled ? 1 : (justLost ? 1 : 0.15);
+      ctx.fillStyle = justLost ? '#ff4d4d' : color;
+      ctx.fillRect(gx, HB.Y, HB.W, HB.H);
+    }
+    ctx.globalAlpha = 1;
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText(label, groupCx, HB.Y + HB.H + HB.LABEL_DY - 6);
+  }
+
+  banner(ctx, cx, text) {              // AUTO_ADVANCE / DRAW 共用通道
+    const total = this.level === 'AUTO_ADVANCE' ? CONFIG.BANNER.ADVANCE_DUR : CONFIG.BANNER.DRAW_DUR;
+    const remain = this.bannerTimer;
+    const t = total - remain;          // 已播时长
+    const a = Math.min(1, t / 0.15, remain / 0.15);   // 淡入淡出
+    ctx.globalAlpha = clamp(a, 0, 1);
+    ctx.font = '44px sans-serif';
+    ctx.fillText(text, cx, 340);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ============================================================
+ * §10.5 Net —— WebRTC 配对码联机（ADR-008 修订 + ADR-011）
+ * 拓扑：星型，权威端 = 房主浏览器（跑 demo 形态 Match）；信令 = 手动配对码
+ * （packSDP/unpackSDP 压缩 SDP 交换）；传输 = 双 DataChannel 分型：
+ *   snap（maxRetransmits:0）：input ↑ / snapshot ↓ —— seq 去重容忍乱序丢帧
+ *   ctrl（reliable+ordered）：claim_seat / start / room_state / match_end / leave
+ * 帧格式沿用架构 v3.0 §1.4（token 字段废除），传输层迁移表照 v3.1 §2。
+ * ============================================================ */
+const NET = {
+  PREFIX: 'OD1.',
+  STUN: 'stun:stun.l.google.com:19302',
+  SPECTATOR_MAX: 8,
+  COUNTDOWN: 3.0,
+  AI_TAKEOVER: 30.0,                 // PLAYING 中断线座位 AI 托管时长（modes.md v3.1）
+  ERR: { E_FORMAT: 'E_FORMAT', E_JSON: 'E_JSON', E_SHAPE: 'E_SHAPE',
+         SEAT_TAKEN: 'SEAT_TAKEN', PEER_LOST: 'PEER_LOST', ROOM_FULL: 'ROOM_FULL' },
+};
+
+/* ---------- base64url（ASCII 安全；浏览器/Node 均有 btoa/atob） ---------- */
+function b64urlEncode(s) {
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s) {
+  let t = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (t.length % 4) t += '=';
+  return atob(t);
+}
+
+/* ---------- 房间码 = 压缩 SDP（关键字段抽取 / 固定模板重建） ----------
+ * 仅支持本引擎自己生成的 offer/answer 形状；非法输入按错误码抛错。
+ * fields: { type, f(fingerprint), u(ice-ufrag), p(ice-pwd), c:[candidate 原文…] } */
+function packSDP(desc) {
+  if (!desc || (desc.type !== 'offer' && desc.type !== 'answer') || typeof desc.sdp !== 'string') {
+    const e = new Error('packSDP: invalid desc'); e.code = NET.ERR.E_SHAPE; throw e;
+  }
+  const fields = { type: desc.type, f: '', u: '', p: '', c: [] };
+  let fpSeen = false;
+  for (const line of desc.sdp.split(/\r?\n/)) {
+    let m;
+    if (!fpSeen && (m = line.match(/^a=fingerprint:\s*(\S+)\s+(\S+)$/))) {
+      fields.f = m[1] + ' ' + m[2]; fpSeen = true;         // 只取一条（多 m 行同凭据）
+    } else if (!fields.u && (m = line.match(/^a=ice-ufrag:\s*(\S+)$/))) {
+      fields.u = m[1];
+    } else if (!fields.p && (m = line.match(/^a=ice-pwd:\s*(\S+)$/))) {
+      fields.p = m[1];
+    } else if ((m = line.match(/^a=candidate:\s*(.+)$/))) {
+      fields.c.push(m[1].trim());
+    }
+  }
+  if (!fields.f || !fields.u || !fields.p) {
+    const e = new Error('packSDP: missing fingerprint/ice credentials');
+    e.code = NET.ERR.E_SHAPE; throw e;
+  }
+  return NET.PREFIX + b64urlEncode(JSON.stringify(fields));
+}
+
+/* 固定 m=application 单行模板重建（DataChannel-only SDP） */
+function buildSDP(fields) {
+  const setup = fields.type === 'offer' ? 'actpass' : 'active';
+  const lines = [
+    'v=0',
+    'o=- 4611731400430051336 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE 0',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 0.0.0.0',
+    'a=ice-ufrag:' + fields.u,
+    'a=ice-pwd:' + fields.p,
+    'a=fingerprint:' + fields.f,
+    'a=setup:' + setup,
+    'a=mid:0',
+    'a=sctp-port:5000',
+    'a=max-message-size:262144',
+  ];
+  for (const c of fields.c) lines.push('a=candidate:' + c);
+  return lines.join('\r\n') + '\r\n';
+}
+
+function unpackSDP(code) {
+  if (typeof code !== 'string' || !code.startsWith(NET.PREFIX)) {
+    const e = new Error('unpackSDP: bad prefix'); e.code = NET.ERR.E_FORMAT; throw e;
+  }
+  let fields;
+  try { fields = JSON.parse(b64urlDecode(code.slice(NET.PREFIX.length))); }
+  catch (err) { const e = new Error('unpackSDP: bad payload'); e.code = NET.ERR.E_JSON; throw e; }
+  if (!fields || (fields.type !== 'offer' && fields.type !== 'answer') ||
+      typeof fields.f !== 'string' || !fields.f ||
+      typeof fields.u !== 'string' || !fields.u ||
+      typeof fields.p !== 'string' || !fields.p || !Array.isArray(fields.c)) {
+    const e = new Error('unpackSDP: missing fields'); e.code = NET.ERR.E_SHAPE; throw e;
+  }
+  for (const c of fields.c) {
+    if (typeof c !== 'string' || !/^[\w .:+-]+$/.test(c)) {
+      const e = new Error('unpackSDP: bad candidate'); e.code = NET.ERR.E_SHAPE; throw e;
+    }
+  }
+  return { type: fields.type, sdp: buildSDP(fields) };
+}
+
+/* ---------- NetChannel：一条访客连接（双 DC 分型封装；stub 兼容） ----------
+ * 上层只认 sendSnap/sendCtrl/onSnap/onCtrl/onClose/close，DC 实现可注入。 */
+class NetChannel {
+  /* dcSnap/dcCtrl：RTCDataChannel-like（含 maxRetransmits 可静态检查） */
+  constructor(dcSnap, dcCtrl) {
+    this.dcSnap = dcSnap; this.dcCtrl = dcCtrl;
+    this.open = dcSnap.readyState === undefined || dcSnap.readyState === 'open';
+    this._onSnap = null; this._onCtrl = null; this._onClose = null;
+    const wire = (dc, cb) => {
+      if (!dc) return;
+      if (dc.addEventListener) {
+        dc.addEventListener('message', (e) => { if (cb) cb(JSON.parse(e.data)); });
+        dc.addEventListener('close', () => { this.open = false; if (this._onClose) this._onClose(); });
+      } else {                                   // stub：直接赋 onmessage/onclose
+        dc.onmessage = (e) => { if (cb) cb(JSON.parse(e.data)); };
+        dc.onclose = () => { this.open = false; if (this._onClose) this._onClose(); };
+      }
+    };
+    wire(dcSnap, (f) => { if (this._onSnap) this._onSnap(f); });
+    wire(dcCtrl, (f) => { if (this._onCtrl) this._onCtrl(f); });
+  }
+  sendSnap(frame) { if (this.open) this.dcSnap.send(JSON.stringify(frame)); }
+  sendCtrl(frame) { if (this.open) this.dcCtrl.send(JSON.stringify(frame)); }
+  onSnap(cb) { this._onSnap = cb; }
+  onCtrl(cb) { this._onCtrl = cb; }
+  onClose(cb) { this._onClose = cb; }
+  close() { this.open = false; try { this.dcSnap.close(); } catch (e) {} try { this.dcCtrl.close(); } catch (e) {} if (this._onClose) this._onClose(); }
+}
+
+/* ---------- 浏览器 PeerConnection 工厂（真实 WebRTC；Node 测试注入 stub） ---------- */
+function makeRealPC() {
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: NET.STUN }] });
+  return pc;
+}
+/* 建 DC 对：offer 方显式创建（参数即分型契约），answer 方按收到的 negotiation 建立 */
+function hostDataChannels(pc) {
+  const snap = pc.createDataChannel('snap', { ordered: false, maxRetransmits: 0 });
+  const ctrl = pc.createDataChannel('ctrl', { ordered: true });
+  return { snap, ctrl };
+}
+/* 等 DataChannel open（stub 无 readyState 字段视为已开） */
+function whenDcOpen(dc, ms) {
+  return new Promise((resolve, reject) => {
+    if (!dc || dc.readyState === undefined || dc.readyState === 'open') { resolve(); return; }
+    const t = setTimeout(() => reject(errCode(NET.ERR.PEER_LOST, 'dc open timeout')), ms || 10000);
+    dc.addEventListener('open', () => { clearTimeout(t); resolve(); }, { once: true });
+    dc.addEventListener('close', () => { clearTimeout(t); reject(errCode(NET.ERR.PEER_LOST, 'dc closed')); }, { once: true });
+  });
+}
+function errCode(code, msg) { const e = new Error(code + ': ' + msg); e.code = code; return e; }
+/* 等 ICE gathering complete（手动配对无 trickle）；8s 超时保底出码 */
+function waitIceComplete(pc, ms) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    const t = setTimeout(() => { pc.removeEventListener('icegatheringstatechange', ch); resolve(); }, ms || 8000);
+    const ch = () => {
+      if (pc.iceGatheringState === 'complete') {
+        clearTimeout(t); pc.removeEventListener('icegatheringstatechange', ch); resolve();
+      }
+    };
+    pc.addEventListener('icegatheringstatechange', ch);
+  });
+}
+
+/* ---------- PairingHost：房主侧（多张并行 pending offer，每访客一张） ---------- */
+class PairingHost {
+  /* deps: {makePC?}——Node 测试注入 stub 工厂；返回 {pc, chans?, waitOpen} */
+  constructor(deps) {
+    this.makePC = (deps && deps.makePC) || makeRealPC;
+    this.pending = new Map();        // inviteId → {pc, chans, answer, resolveOpen}
+    this.onOpen = null;              // (channel) => void（连接建立回调，Room 挂钩）
+  }
+  /* 生成一张邀请码（等 ICE gathering complete；非法环境错误如实抛出） */
+  async createInvite() {
+    const pc = this.makePC();
+    const chans = hostDataChannels(pc);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitIceComplete(pc);
+    const id = 'I' + (this._seq = (this._seq || 0) + 1);
+    const entry = { pc, chans, id };
+    this.pending.set(id, entry);
+    /* 连接建立 = 双 DC open（真实 WebRTC）；stub DC 无 readyState 即达 */
+    const chanPromise = Promise.all([whenDcOpen(chans.snap), whenDcOpen(chans.ctrl)])
+      .then(() => {
+        this.pending.delete(id);
+        const ch = new NetChannel(chans.snap, chans.ctrl);
+        if (this.onOpen) this.onOpen(ch);
+        return ch;
+      })
+      .catch((err) => { this.pending.delete(id); throw err; });
+    return { code: packSDP(pc.localDescription), id, chanPromise };
+  }
+  /* 粘贴访客应答码 → 完成该张 offer 的配对（真实 WebRTC 由 SDP 交换驱动建连） */
+  async acceptAnswer(id, answerCode) {
+    const entry = this.pending.get(id);
+    if (!entry) throw errCode(NET.ERR.PEER_LOST, 'no such invite');
+    const desc = unpackSDP(answerCode);
+    if (desc.type !== 'answer') throw errCode(NET.ERR.E_SHAPE, 'not an answer');
+    await entry.pc.setRemoteDescription(desc);
+    if (entry.pc.onanswer) entry.pc.onanswer();   // stub 钩子：测试手动驱动建连
+  }
+}
+
+/* ---------- PairingGuest：访客侧（粘贴 offer → 应答码） ---------- */
+class PairingGuest {
+  constructor(deps) {
+    this.makePC = (deps && deps.makePC) || makeRealPC;
+  }
+  async join(offerCode) {
+    const offer = unpackSDP(offerCode);
+    if (offer.type !== 'offer') throw errCode(NET.ERR.E_SHAPE, 'not an offer');
+    const pc = this.makePC();
+    this.pc = pc;
+    /* 先注册 datachannel 收集（事件可能在 setRemote 同步/异步派发；按名字分型） */
+    const got = {};
+    const chansReady = new Promise((resolve, reject) => {
+      pc.addEventListener('datachannel', (e) => {
+        got[e.channel.name] = e.channel;
+        if (got.snap && got.ctrl) resolve(got);
+      });
+      setTimeout(() => reject(errCode(NET.ERR.PEER_LOST, 'datachannel timeout')), 10000);
+    });
+    /* 真实 WebRTC 时序：setRemoteDescription(offer) 触发 ondatachannel */
+    await pc.setRemoteDescription(offer);
+    const chans = await chansReady;
+    this.chans = chans;
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitIceComplete(pc);
+    const chanPromise = Promise.all([whenDcOpen(chans.snap), whenDcOpen(chans.ctrl)])
+      .then(() => new NetChannel(chans.snap, chans.ctrl));
+    return { answerCode: packSDP(pc.localDescription), chanPromise };
+  }
+}
+
+/* ---------- NetInputSource：远程 input 帧 → Input 同接口（房主端 P2 席） ----------
+ * seq 去重（乱序容忍）：只消费 seq 更大的帧；每帧带全量状态，无 HOL 阻塞。 */
+class NetInputSource {
+  constructor() {
+    this._lastSeq = -1; this._move = { x: 0, y: 0 };
+    this._clickPending = false; this._clickConsumed = true; this._guard = false;
+  }
+  /* onInput 回调挂 NetChannel.onSnap 的 input 帧分流 */
+  feed(frame) {
+    if (!frame || frame.t !== 'input') return;
+    if (frame.seq <= this._lastSeq) return;          // 旧/重帧丢弃
+    this._lastSeq = frame.seq;
+    this._move = frame.move || { x: 0, y: 0 };
+    if (frame.click0) { this._clickPending = true; this._clickConsumed = false; }
+    this._guard = !!frame.guardHeld;
+  }
+  getMoveAxis() { return this._move; }
+  getChargeDir() { return { x: 0, y: 0 }; }          // 远程无鼠标语义；Player 层朝对手兜底
+  consumeClick(btn) {
+    if (btn !== 0) return false;
+    if (this._clickConsumed) return false;
+    this._clickConsumed = true; return this._clickPending;
+  }
+  guardHeld() { return this._guard; }
+  isDown() { return false; }
+  endFrame() { this._clickPending = false; }
+}
+
+/* ---------- HostRoom：权威端房间（WAITING→COUNTDOWN→PLAYING→ENDED，三局两胜） ---------- */
+class HostRoom {
+  constructor(fx, audio) {
+    this.fx = fx; this.audio = audio || { play() {} };
+    this.phase = 'WAITING';
+    this.channels = [];               // 全部连接（含观战）
+    this.seats = { P1: null, P2: null };   // P1=本地（human/AI 由外部注入），P2=channel|null
+    this.p1Input = null; this.p2Input = null;   // human: app.input / AI: AIInput / 远程: NetInputSource
+    this.match = null;
+    this.p1Wins = 0; this.p2Wins = 0;
+    this._countdown = 0;
+    this._simTime = 0;
+  }
+  /* 连接入房（PairingHost.onOpen 挂钩）：默认观战，等待 claim_seat；
+   * 访客连接上限 = P2 席 1 条 + 观战 ≤8，超出拒码（ROOM_FULL） */
+  addChannel(ch) {
+    if (this.channels.length >= NET.SPECTATOR_MAX + 1) {
+      ch.sendCtrl({ t: 'error', code: NET.ERR.ROOM_FULL, msg: 'spectator cap' });
+      ch.close();
+      return false;
+    }
+    ch.seat = null;
+    this.channels.push(ch);
+    ch.onCtrl((f) => this._onCtrl(ch, f));
+    ch.onClose(() => this._onClose(ch));
+    ch.onSnap((f) => { if (ch.seat === 'P2' && f.t === 'input' && this.p2Input) this.p2Input.feed(f); });
+    this._broadcastState();
+  }
+  _onCtrl(ch, f) {
+    switch (f.t) {
+      case 'claim_seat': {
+        if (f.seat !== 'P1' && f.seat !== 'P2') { ch.sendCtrl({ t: 'error', code: 'SEAT_INVALID' }); return; }
+        if (f.seat === 'P1') { ch.sendCtrl({ t: 'error', code: NET.ERR.SEAT_TAKEN, msg: 'P1 由房主持有' }); return; }
+        if (this.seats.P2 && this.seats.P2 !== ch) { ch.sendCtrl({ t: 'error', code: NET.ERR.SEAT_TAKEN }); return; }
+        this.seats.P2 = ch; ch.seat = 'P2';
+        this.p2Input = new NetInputSource();       // 远程席 = NetInputSource（人类/AI 同包）
+        ch.sendCtrl({ t: 'seat_ok', seat: 'P2' });
+        this._broadcastState();
+        break;
+      }
+      case 'release_seat': {
+        if (ch.seat === 'P2') { this.seats.P2 = null; ch.seat = null; this.p2Input = null; this._broadcastState(); }
+        break;
+      }
+      case 'start': {
+        if (this.phase === 'WAITING' || this.phase === 'ENDED') this.beginCountdown();
+        break;
+      }
+      case 'leave': ch.close(); break;
+      default: break;
+    }
+  }
+  _onClose(ch) {
+    const i = this.channels.indexOf(ch);
+    if (i < 0) return;                   // 幂等：snap/ctrl 双 DC close 各触发一次，只处理首回
+    this.channels.splice(i, 1);
+    if (ch.seat === 'P2') {
+      ch.seat = null; this.seats.P2 = null;
+      /* PLAYING 中断线：座位 30s AI 托管（p2Input 换内置 AI），超时不变回收（P2 唯一） */
+      if (this.phase === 'PLAYING' && this.match && !this.match.ended) {
+        this.p2Input = new AIInput(createBuiltinAI(), 'P2');
+        this._takeoverUntil = (this._simTime || 0) + NET.AI_TAKEOVER;
+      } else this.p2Input = null;
+    }
+    this._broadcastState();
+  }
+  /* 房主开新局：COUNTDOWN 3s → demo Match（HeadlessMatch = v3.0 无头化成果复用） */
+  beginCountdown() {
+    this.phase = 'COUNTDOWN';
+    this._countdown = NET.COUNTDOWN;
+    this._broadcastState();
+  }
+  /* COUNTDOWN 到点自动开局（P2 缺席时内置 AI 托管兜底，等价断线语义） */
+  startMatch() {
+    if (this.phase === 'PLAYING') return;
+    this._matchSeq = (this._matchSeq || 0) + 1;
+    this.match = new Match(
+      { input: this.p1Input, fx: this.fx, audio: this.audio },
+      {
+        mode: 'demo',
+        p1Input: this.p1Input,
+        p2Input: this.p2Input || new AIInput(createBuiltinAI(), 'P2'),
+        timeLimit: 300,
+        onEnd: (seat) => this._onMatchEnd(seat),
+      });
+    this.phase = 'PLAYING';
+    this._simTime = 0;
+    this._broadcastState();
+  }
+  _onMatchEnd(seat) {
+    if (seat === 'P1') this.p1Wins++;
+    else if (seat === 'P2') this.p2Wins++;
+    const done = this.p1Wins >= 2 || this.p2Wins >= 2;
+    this.phase = done ? 'ENDED' : 'WAITING';
+    const frame = { t: 'match_end', result: seat, p1Wins: this.p1Wins, p2Wins: this.p2Wins };
+    this._broadcastCtrl(frame);
+    this.match = null;
+  }
+  /* 固定步驱动（App 主循环接入；dt = CONFIG.STEP） */
+  update(dt) {
+    if (this.phase === 'COUNTDOWN') {
+      this._countdown -= dt;
+      if (this._countdown <= 1e-9) this.startMatch();   // 浮点余数容差（±1 帧先例内）
+    } else if (this.phase === 'PLAYING' && this.match && !this.match.ended) {
+      this._simTime += dt;
+      this.match.update(dt);
+      this._broadcastSnapshot();
+    }
+  }
+  _broadcastSnapshot() {
+    const m = this.match;
+    if (!m) return;
+    const frame = {
+      t: 'snapshot', tick: m.tick,
+      p1: this._entSnap(m.player), p2: this._entSnap(m.p2),
+      events: (m.fx.lastEmitted || []).filter((e) => e.type !== 'guard_halo'),   // halo 附着型由访客按 phase 复现
+    };
+    for (const ch of this.channels) if (ch.open) ch.sendSnap(frame);
+  }
+  _entSnap(ent) {
+    if (!ent || !ent.combat) return { x: 0, y: 0, phase: 'DEAD', hp: 0, guard: 0 };
+    return { x: ent.x, y: ent.y, phase: ent.combat.phase, hp: ent.combat.hp,
+             guard: ent.combat.phase === 'GUARD' ? ent.combat.t : 0, facing: ent.facing };
+  }
+  _broadcastState() {
+    this._broadcastCtrl({ t: 'room_state',
+      seats: { P1: 'host', P2: this.seats.P2 ? 'remote' : null },
+      spectators: this.channels.filter((c) => !c.seat).length, phase: this.phase });
+  }
+  _broadcastCtrl(frame) {
+    for (const ch of this.channels) if (ch.open) ch.sendCtrl(frame);
+  }
+}
+
+/* ---------- GuestClient：访客端（收快照渲染 + 发 input + AI 席本地跑） ---------- */
+class GuestClient {
+  constructor(fx) {
+    this.fx = fx || new FXSystem();
+    this.chan = null;
+    this.state = { p1: null, p2: null };   // 最新快照（一期直渲最新帧，插值后续可选）
+    this.phase = 'WAITING';
+    this.p1Wins = 0; this.p2Wins = 0;
+    this.mySeat = null;
+    this._seq = 0;
+    this._ai = null;                        // AI 席：本地 think（ai-interface.md v3.1 §2）
+    this._inputMove = { x: 0, y: 0 }; this._inputClick = false; this._inputGuard = false;
+  }
+  attach(chan) {
+    this.chan = chan;
+    chan.onSnap((f) => {
+      if (f.t === 'snapshot') {
+        this.state = { p1: f.p1, p2: f.p2, tick: f.tick };
+        for (const ev of f.events || []) this.fx.queue.push(ev);
+        this.fx.flush(); this.fx.update(CONFIG.STEP);
+      }
+    });
+    chan.onCtrl((f) => {
+      if (f.t === 'room_state') this.phase = f.phase;
+      if (f.t === 'match_end') { this.p1Wins = f.p1Wins; this.p2Wins = f.p2Wins; if (this.onMatchEnd) this.onMatchEnd(f); }
+      if (f.t === 'seat_ok') {
+        this.mySeat = f.seat;
+        if (this._seatWaiter && this._seatWaiter.seat === f.seat) {
+          this._seatWaiter.resolve(); this._seatWaiter = null;
+        }
+      }
+      if (f.t === 'error') {
+        if (this._seatWaiter) { const w = this._seatWaiter; this._seatWaiter = null; w.reject(errCode(f.code || 'SEAT_ERROR', f.msg || '')); }
+        if (this.onError) this.onError(f);
+      }
+    });
+    chan.onClose(() => {
+      if (this._seatWaiter) { const w = this._seatWaiter; this._seatWaiter = null; w.reject(errCode(NET.ERR.PEER_LOST, 'channel closed')); }
+      if (this.onLost) this.onLost();
+    });
+  }
+  /* OrbAI.claimSeat('p1'|'p2')：Promise 语义；被占 → reject SEAT_TAKEN（不自动抢占） */
+  claimSeat(seat) {
+    if (!this.chan || !this.chan.open) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not connected'));
+    return new Promise((resolve, reject) => {
+      this._seatWaiter = { seat: seat.toUpperCase(), resolve, reject };
+      this.chan.sendCtrl({ t: 'claim_seat', seat: seat.toUpperCase() });
+    });
+  }
+  releaseSeat() {
+    if (!this.chan || !this.chan.open) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not connected'));
+    this.chan.sendCtrl({ t: 'release_seat' });
+    this.mySeat = null;
+    return Promise.resolve();
+  }
+  /* AI 席（访客端本地 think）：impl = createBuiltinAI() / compileAICode 产物 */
+  attachAI(impl) {
+    this._ai = new AIInput(impl, this.mySeat === 'P2' ? 'P2' : 'P1');
+  }
+  /* 人类输入采样（GuestScreen 每帧调）：本地 Input → 缓存 → sendInput */
+  sampleInput(input) {
+    this._inputMove = input.getMoveAxis();
+    this._inputClick = input.consumeClick(0);
+    this._inputGuard = input.guardHeld();
+  }
+  sendInput() {
+    if (!this.chan || !this.chan.open) return;
+    let move = this._inputMove, click0 = this._inputClick, guardHeld = this._inputGuard;
+    if (this._ai) {                        // AI 席：本地快照 think → 同包上行
+      this._ai._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+      const snap = this._guestSnapshotView();
+      try {
+        const d = this._ai.impl.think(snap);
+        this._ai._dec = { move: d && d.move ? { x: d.move.x || 0, y: d.move.y || 0 } : { x: 0, y: 0 },
+                          click0: !!(d && d.click0), guardHeld: !!(d && d.guardHeld) };
+      } catch (err) { console.warn('[OrbAI] guest think 异常：', err); }
+      move = this._ai._dec.move; click0 = this._ai._dec.click0; guardHeld = this._ai._dec.guardHeld;
+    }
+    this.chan.sendSnap({ t: 'input', seq: this._seq++,
+                         move, click0: !!click0, guardHeld: !!guardHeld });
+  }
+  /* 访客侧 think 快照：与 Match.snapshotView 同构（AI 无感差异） */
+  _guestSnapshotView() {
+    const me = this.mySeat === 'P2' ? this.state.p2 : this.state.p1;
+    const op = this.mySeat === 'P2' ? this.state.p1 : this.state.p2;
+    const norm = (e) => e ? { x: e.x, y: e.y, phase: e.phase, hp: e.hp, guardCd: 0,
+                              chargeDir: { x: Math.cos(e.facing || 0), y: Math.sin(e.facing || 0) } }
+                         : { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } };
+    return { tick: this.state.tick || 0, self: norm(me), opp: norm(op),
+             arena: { W: CONFIG.VIEW.W, H: CONFIG.VIEW.H, BALL_R: CONFIG.BALL.R,
+                      HIT_R: CONFIG.CHARGE.HIT_R, HIT_OFFSET: CONFIG.CHARGE.HIT_OFFSET,
+                      CHARGE_DISTANCE: CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000 } };
+  }
+  /* 快照渲染（访客屏）：两球 + 特效 + 血条（复用 drawBall 语义的轻量版） */
+  render(ctx) {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+    this.fx.render(ctx);
+    for (const [ent, color] of [[this.state.p1, CONFIG.COLOR.PLAYER], [this.state.p2, CONFIG.COLOR.GHOST]]) {
+      if (!ent || ent.phase === 'DEAD') continue;
+      ctx.save();
+      ctx.shadowColor = color; ctx.shadowBlur = 18;
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(ent.x, ent.y, CONFIG.BALL.R, 0, Math.PI * 2); ctx.fill();
+      if (ent.phase === 'GUARD') {         // guard_halo 附着型：按 phase 复现（events 中已剔除）
+        ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5;
+        ctx.beginPath(); ctx.arc(ent.x, ent.y, 20, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+    ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('P1 ' + this.p1Wins + ' : ' + this.p2Wins + ' P2', CONFIG.VIEW.W / 2, 40);
+  }
+}
+
+/* ============================================================
+ * §11 Screens —— 屏幕栈 + DOM overlay（ADR-005）
+ * ============================================================ */
+class Screen {
+  constructor(app) { this.app = app; }
+  get ambient() { return false; }       // 菜单屏 true：App 驱动氛围粒子
+  enter() {} exit() {} update(dt) {} renderGame(ctx) {}
+  onEsc() { return false; }             // 返回 true 表示 ESC 已消化
+}
+
+class ScreenStack {
+  constructor(app) { this.app = app; this.stack = []; this.fading = false; }
+  get current() { return this.stack[this.stack.length - 1]; }
+  _swap(fn) {
+    if (typeof document === 'undefined') { fn(); return; }   // 测试环境直切
+    if (this.fading) return;
+    this.fading = true;
+    const f = document.getElementById('fade');
+    f.style.opacity = 1;
+    setTimeout(() => {                       // 120ms 淡入淡出（复用横幅节拍通道）
+      fn();
+      f.style.opacity = 0;
+      setTimeout(() => { this.fading = false; }, 130);
+    }, 130);
+  }
+  push(s) { this._swap(() => { if (this.current) this.current.exit(); this.stack.push(s); s.enter(); }); }
+  pop() { this._swap(() => { const s = this.stack.pop(); if (s) s.exit(); }); }
+  replace(s) { this._swap(() => { while (this.stack.length) this.stack.pop().exit(); this.stack.push(s); s.enter(); }); }
+}
+
+/* ---------- v2.1 开机屏（v1.0 观感：标题 + 点击开始；点击一次直达 MENU） ---------- */
+class TitleScreen extends Screen {
+  get id() { return 'scr-title'; }
+  enter() { this.app.showScreen('scr-title'); }
+  exit() { this.app.hideScreen('scr-title'); }
+  onClick() {                            // 仅一次点击有效：入 MENU 后 overlay 已隐藏
+    this.app.stack.replace(new MenuScreen(this.app));
+  }
+  onEsc() { return true; }               // ESC 在 TITLE 无动作（且任何流程永不回 TITLE）
+}
+
+/* ---------- 主菜单 ---------- */
+class MenuScreen extends Screen {
+  get ambient() { return true; }
+  enter() { this.app.showScreen('scr-menu'); this.app.refreshMenu(); }
+  exit() { this.app.hideScreen('scr-menu'); }
+  onEsc() { return true; }              // 主菜单 ESC 不动作
+}
+
+/* ---------- v3.1 PAIR 屏（配对联机唯一新 DOM 屏；PairingHost/PairingGuest 的 UI 外壳） ---------- */
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    return true;
+  }
+  try {                                    // file:// 降级：execCommand（单文件双击即玩保底）
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    return true;
+  } catch (e) { return false; }
+}
+
+class PairScreen extends Screen {
+  get ambient() { return true; }
+  constructor(app, mode) { super(app); this.mode = mode; this._lastInvite = null; this._lastCode = null; }
+  enter() {
+    const app = this.app;
+    app.showScreen('scr-pair');
+    app._el('pair-choose').style.display = this.mode === 'choose' ? '' : 'none';
+    app._el('pair-host').style.display = this.mode === 'host' ? '' : 'none';
+    app._el('pair-guest').style.display = this.mode === 'guest' ? '' : 'none';
+    this._status(this.mode === 'host' ? '你是房主（权威端）'
+               : this.mode === 'guest' ? '加入房间' : '创建或加入房间');
+  }
+  exit() { this.app.hideScreen('scr-pair'); }
+  _el(id) { return this.app._el(id); }
+  _status(text, isErr) {
+    const el = this._el('pair-status');
+    el.textContent = text;
+    el.style.color = isErr ? '#ff6b6b' : '#d9a441';
+  }
+  /* —— 房主：生成邀请码 —— */
+  async genInvite() {
+    const app = this.app;
+    this._status('生成中…（等待 ICE 收集）');
+    try {
+      if (!app.pairingHost) app.pairingHost = new PairingHost();
+      app.pairingHost.onOpen = (ch) => {
+        app.hostRoom.addChannel(ch);
+        this._refreshPeers();
+        this._status('已连接', false);
+      };
+      const invite = await app.pairingHost.createInvite();
+      this._lastInvite = invite; this._lastCode = invite.code;
+      const box = this._el('pair-code');
+      box.textContent = invite.code;
+      box.style.display = 'block';
+      this._el('pair-copy').style.display = '';
+      this._status('邀请码已生成——发给对方，然后粘贴其应答码');
+    } catch (err) {
+      this._status('生成失败：' + (err.code || err.message) + '（请在同一局域网内使用）', true);
+      throw err;                            // OrbAI.createRoom 语义：错误上抛
+    }
+  }
+  /* —— 房主：确认应答码 —— */
+  async confirmAnswer(codeIn) {
+    if (!this._lastInvite) { this._status('请先生成邀请码', true); return; }
+    try {
+      await this.app.pairingHost.acceptAnswer(this._lastInvite.id, codeIn);
+      this._status('应答码已确认，等待连接建立…');
+    } catch (err) {
+      this._status('应答码无效：' + (err.code || err.message), true);
+      throw err;
+    }
+  }
+  /* —— 访客：凭邀请码加入 —— */
+  async joinWith(codeIn) {
+    const app = this.app;
+    this._status('生成应答码…');
+    try {
+      if (!app.pairingGuest) app.pairingGuest = new PairingGuest();
+      if (!app.guestClient) app.guestClient = new GuestClient(app.fx);
+      const r = await app.pairingGuest.join(codeIn);
+      const out = this._el('pair-answer-out');
+      out.textContent = r.answerCode;
+      out.style.display = 'block';
+      this._el('pair-answer-copy').style.display = '';
+      this._el('pair-wait').style.display = '';
+      this._el('pair-claim-p2').style.display = '';
+      this._status('把应答码回传给房主，等待确认…');
+      r.chanPromise.then((ch) => {
+        app.guestClient.attach(ch);
+        this._el('pair-wait').textContent = '已连接！可占座 P2 或观战';
+        this._status('已连接', false);
+      }).catch((err) => {
+        this._status('连接失败：' + (err.code || err.message) + '——请在同一局域网内使用', true);
+      });
+      return r;
+    } catch (err) {
+      this._status('邀请码无效：' + (err.code || err.message), true);
+      throw err;
+    }
+  }
+  _refreshPeers() {
+    const room = this.app.hostRoom;
+    const n = room ? room.channels.length : 0;
+    const p2 = room && room.seats.P2 ? '已入座' : '空位';
+    this._el('pair-peers').textContent = '连接数：' + n + ' · P2 席位：' + p2 + ' · 观战上限 ' + NET.SPECTATOR_MAX;
+  }
+  onEsc() { this.app.stack.replace(new MenuScreen(this.app)); return true; }
+}
+
+/* ---------- v3.1 联机对局屏（host：驱动权威 HostRoom / guest：采样+发 input+快照渲染） ---------- */
+class NetGameScreen extends Screen {
+  constructor(app, mode) { super(app); this.mode = mode; this.confirming = false; }
+  enter() {
+    if ('ontouchstart' in window) this.app.setTouchUI(true);
+    if (this.mode === 'host') this.app.hostRoom.p1Input = this.app.input;   // 房主 P1 = 本地 human（AI 可经 OrbAI 注入替换）
+  }
+  exit() { this.app.setTouchUI(false); }
+  update(dt) {
+    if (this.confirming || this.app.portrait) return;
+    if (this.mode === 'host') {
+      this.app.hostRoom.update(dt);
+    } else {
+      const c = this.app.guestClient;
+      if (c && c.chan) { c.sampleInput(this.app.input); c.sendInput(); }
+    }
+  }
+  renderGame(ctx) {
+    if (this.mode === 'host') {
+      const room = this.app.hostRoom;
+      if (room.phase === 'PLAYING' && room.match) { room.match.render(ctx); return; }
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+      ctx.fillStyle = '#fff'; ctx.font = '40px sans-serif'; ctx.textAlign = 'center';
+      if (room.phase === 'COUNTDOWN') {
+        ctx.fillText(Math.ceil(room._countdown), CONFIG.VIEW.W / 2, 340);
+      } else if (room.phase === 'ENDED' || room.p1Wins + room.p2Wins > 0) {
+        ctx.fillText('P1 ' + room.p1Wins + ' : ' + room.p2Wins + ' P2（三局两胜）', CONFIG.VIEW.W / 2, 330);
+        ctx.font = '20px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)';
+        ctx.fillText('返回配对屏可重开', CONFIG.VIEW.W / 2, 380);
+      } else {
+        ctx.fillText('等待开始…', CONFIG.VIEW.W / 2, 340);
+      }
+    } else {
+      const c = this.app.guestClient;
+      if (c) c.render(ctx);
+      else {
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+        ctx.fillStyle = '#fff'; ctx.font = '30px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('未连接', CONFIG.VIEW.W / 2, 340);
+      }
+    }
+  }
+  onEsc() {                            // 联机放弃：leave 帧（对应 DC close），重走配对
+    this.confirming = true;
+    this.app.showConfirm('退出联机对局？（断线需重新配对）', () => {
+      if (this.mode === 'guest' && this.app.guestClient && this.app.guestClient.chan) {
+        this.app.guestClient.chan.sendCtrl({ t: 'leave' });
+        this.app.guestClient.chan.close();
+      }
+      this.app.stack.replace(new MenuScreen(this.app));
+    }, () => { this.confirming = false; });
+    return true;
+  }
+}
+
+/* ---------- 对局屏（持 Match + HUD + ESC 放弃确认） ---------- */
+class GameScreen extends Screen {
+  /* cfg: {mode, level?(self/boss), ghostReplay?, entryId?, seedTarget?('self'|null)} */
+  constructor(app, cfg) { super(app); this.cfg = cfg; this.match = null; this.confirming = false; }
+  enter() {
+    this._start();
+    this.app.setHud(this._hudLines());
+    /* v3.0：GAME 屏显示触屏控件层（mobile.md §4；非触屏设备 setTouchUI 仅置状态） */
+    if ('ontouchstart' in window) this.app.setTouchUI(true);
+  }
+  exit() {
+    this.app.setHud([]);
+    this.app.setTouchUI(false);
+  }
+  _entry() {
+    if (this.cfg.mode !== 'self' && this.cfg.mode !== 'boss_solo') return null;
+    return this.app.store.list(this.cfg.mode)[(this.cfg.level || 1) - 1] || null;
+  }
+  _start() {
+    /* v3.0 demo 对局（人机 / AI-vs-AI / window.OrbAI 外部驱动）：双输入源注入（ADR-009） */
+    if (this.cfg.mode === 'demo') {
+      const p1Input = this._mkInput(this.cfg.p1, 'P1') || this.app.input;
+      const p2Input = this._mkInput(this.cfg.p2, 'P2') || p1Input;
+      this.match = new Match(
+        { input: this.app.input, fx: this.app.fx, audio: this.app.audio },
+        {
+          mode: 'demo',
+          p1Input, p2Input,
+          onEnd: (seat) => this._onEndDemo(seat),
+        });
+      return;
+    }
+    const entry = this._entry();
+    this.match = new Match(
+      { input: this.app.input, fx: this.app.fx, audio: this.app.audio },
+      {
+        mode: this.cfg.mode,
+        opp: CONFIG.MODES[this.cfg.mode].opp,
+        replay: this.cfg.ghostReplay || (entry ? deserializeReplay(entry.payload) : null),
+        onEnd: (result, replay, seconds) => this._onEnd(result, replay, seconds),
+        // v2.1 播种收窄：仅 solo 第 2 关胜利段进入播种通道（level-flow.md v2.1 §B）
+        onLevelWin: (levelN, winReplay) => this._onLevelWin(levelN, winReplay),
+      });
+  }
+  /* spec: {kind:'human'} | {kind:'builtin'} | {kind:'code', name, code} → Input 源或 null(人类) */
+  _mkInput(spec, seat) {
+    if (!spec || spec.kind === 'human') return null;
+    try {
+      if (spec.kind === 'builtin') return new AIInput(createBuiltinAI(), seat);
+      if (spec.kind === 'code') return new AIInput(compileAICode(spec.code), seat);
+    } catch (err) {
+      this.app.toast('AI 无效：' + err.message, 4000);
+      return null;                      // 降级人类输入，不阻断进屏
+    }
+    return null;
+  }
+  /* demo 收束：seat = 'P1'|'P2'|null(超时平局)。分发 window.OrbAI 回调 + 结算屏 */
+  _onEndDemo(seat) {
+    const app = this.app;
+    if (this.cfg.matchId != null && window.OrbAI) {
+      window.OrbAI._dispatch(this.cfg.matchId, {
+        winner: seat,
+        hp: this.match ? {
+          p1: this.match.player ? this.match.player.combat.hp : 0,
+          p2: this.match.p2 ? this.match.p2.combat.hp : 0,
+        } : null,
+        duration: this.match ? this.match.matchTime : 0,
+      });
+    }
+    const title = seat == null ? '平局' : (seat === 'P1' ? 'P1 获胜' : 'P2 获胜');
+    app.stack.replace(new ResultScreen(app, {
+      title,
+      lines: ['用时 ' + (this.match ? this.match.matchTime.toFixed(1) : '0') + ' 秒'],
+      btns: [
+        { label: '再来一局', act: () => app.stack.replace(new GameScreen(app, this.cfg)) },
+        { label: '返回菜单', act: () => app.stack.replace(new MenuScreen(app)) },
+      ],
+    }));
+  }
+  _onLevelWin(levelN, winReplay) {
+    if (this.cfg.mode !== 'solo') return;
+    seedOnLevelWin(this.app.store, levelN, winReplay);   // v2.1 播种收窄：仅第 2 关
+  }
+  _hudLines() {
+    const entry = this._entry();
+    if (this.cfg.mode === 'solo') return [];
+    return hudLines(this.cfg.mode, entry ? entry.counters : null);
+  }
+  update(dt) {
+    if (this.confirming) return;        // 确认框打开：对局冻结
+    if (this.app.portrait) return;      // v3.0 手机竖屏：遮罩期间对局暂停（mobile.md §5）
+    if (this.match && !this.match.ended) this.match.update(dt);
+  }
+  renderGame(ctx) { if (this.match) this.match.render(ctx); }
+  onEsc() {                            // menu.md §4.5：放弃本次挑战？
+    if (this.match.ended) return false;
+    this.confirming = true;
+    this.app.showConfirm('放弃本次挑战？', () => {
+      this.match.abandon();            // 不产生 replay、不计任何数
+      this.app.stack.replace(new MenuScreen(this.app));
+    }, () => { this.confirming = false; });
+    return true;
+  }
+  _onEnd(result, replay, seconds) {
+    const app = this.app, store = app.store, mode = this.cfg.mode;
+    /* v2.1：solo 无限链不再结算（胜利自动推进、死亡 R 重试、放弃走 onEsc 确认框），
+     * _onEnd 仅服务 self/boss 单关对局。*/
+    if (mode === 'solo') return;
+    if (mode === 'self') {
+      const level = this.cfg.level || 1;
+      if (result === 'win') {
+        const r = onSelfWin(store, level, replay);
+        app.stack.replace(new ResultScreen(app, {
+          title: '你击败了第 ' + level + ' 关幽灵',
+          lines: ['已推进到第 ' + r.nextLevel + ' 关 · 用时 ' + seconds.toFixed(1) + ' 秒'],
+          btns: [
+            { label: '挑战第 ' + r.nextLevel + ' 关', act: () => app.stack.replace(new GameScreen(app, { mode: 'self', level: r.nextLevel })) },
+            { label: '返回菜单', act: () => app.stack.replace(new MenuScreen(app)) },
+          ],
+        }));
+      } else {
+        const r = onSelfLose(store, level, replay);  // 败局 replay 顶替/计数（Recorder 全局化）
+        const lines = ['已打败玩家数：' + r.defeated + '/20'];
+        if (r.promoted) lines.push('该幽灵已晋级单机boss第 ' + r.bossLevel + ' 关，你的本次记录顶替了槽位');
+        app.stack.replace(new ResultScreen(app, {
+          title: '被第 ' + level + ' 关幽灵击败',
+          lines,
+          btns: [
+            { label: '再战', act: () => app.stack.replace(new GameScreen(app, { mode: 'self', level })) },
+            { label: '返回菜单', act: () => app.stack.replace(new MenuScreen(app)) },
+          ],
+        }));
+      }
+      return;
+    }
+    if (mode === 'boss_solo') {
+      const level = this.cfg.level || 1;
+      if (result === 'win') {
+        const r = onBossSoloWin(store, level);
+        const lines = ['被挑战成功数：' + r.challenged + '/20'];
+        if (r.deleted) lines.push('该 boss 已被删除，后续关顺位前移');
+        if (r.poolEmpty) lines.push('单机boss池已清空');
+        const btns = [];
+        if (!r.poolEmpty && r.nextLevel) {
+          btns.push({ label: '挑战下一关', act: () => app.stack.replace(new GameScreen(app, { mode: 'boss_solo', level: r.nextLevel })) });
+        }
+        btns.push({ label: '返回菜单', act: () => app.stack.replace(new MenuScreen(app)) });
+        app.stack.replace(new ResultScreen(app, { title: '击败单机boss第 ' + level + ' 关', lines, btns }));
+      } else {
+        const r = onBossSoloLose(store, level);
+        app.stack.replace(new ResultScreen(app, {
+          title: '被单机boss第 ' + level + ' 关击败',
+          lines: ['已打败玩家数：' + r.defeated],
+          btns: [
+            { label: '再战', act: () => app.stack.replace(new GameScreen(app, { mode: 'boss_solo', level })) },
+            { label: '返回菜单', act: () => app.stack.replace(new MenuScreen(app)) },
+          ],
+        }));
+      }
+      return;
+    }
+    // 其余模式（二期）直接回菜单
+    app.stack.replace(new MenuScreen(app));
+  }
+}
+
+/* ---------- 结算屏 ---------- */
+class ResultScreen extends Screen {
+  get ambient() { return true; }
+  constructor(app, opts) { super(app); this.opts = opts; }
+  enter() {
+    document.getElementById('result-title').textContent = this.opts.title;
+    document.getElementById('result-lines').innerHTML =
+      this.opts.lines.map((l) => '<div>' + l + '</div>').join('');
+    const box = document.getElementById('result-btns');
+    box.innerHTML = '';
+    this.opts.btns.forEach((b) => {
+      const el = document.createElement('div');
+      el.className = 'mi';
+      el.textContent = b.label;
+      el.addEventListener('click', b.act);
+      box.appendChild(el);
+    });
+    this.app.showScreen('scr-result');
+  }
+  exit() { this.app.hideScreen('scr-result'); }
+}
+
+/* ============================================================
+ * §12 App —— 主循环 + 屏幕栈 + DOM 菜单编排
+ * ============================================================ */
+class App {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.input = new Input(canvas);
+    this.fx = new FXSystem();
+    this.audio = new AudioBus();
+    this.store = new LocalGhostStore();      // v3.0：本地池（联机 PVP 直连对局，无幽灵池）
+    /* v3.1 联机：权威房主房间 / 配对器 / 访客端（PairScreen 与 OrbAI 共用） */
+    this.hostRoom = new HostRoom(this.fx, this.audio);
+    this.pairingHost = null; this.pairingGuest = null; this.guestClient = null;
+    this.stack = new ScreenStack(this);
+    this.confirmOpen = false;
+    this.portrait = false;                   // v3.0 手机竖屏态（遮罩 + 对局暂停）
+
+    // 音频 lazy init：首次 pointerdown（控制 #7）
+    window.addEventListener('pointerdown', () => this.audio.init(), { once: false });
+    // v3.0 iOS 音频解锁：touchend 后 ctx 若 suspended 则 resume（mobile.md §6）
+    window.addEventListener('touchend', () => this.audio.init(), { once: false });
+    // 失焦恢复：timeScale 状态复位（fx.md §6.3）
+    window.addEventListener('focus', () => {});
+    // ESC 逐级返回（menu.md §4.5）
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (this.confirmOpen) { this.hideConfirm(true); return; }
+      const s = this.stack.current;
+      if (s && s.onEsc()) return;
+    });
+
+    // CSS 等比 letterbox
+    const fit = () => {
+      const s = Math.min(window.innerWidth / CONFIG.VIEW.W, window.innerHeight / CONFIG.VIEW.H);
+      canvas.style.width = (CONFIG.VIEW.W * s) + 'px';
+      canvas.style.height = (CONFIG.VIEW.H * s) + 'px';
+    };
+    window.addEventListener('resize', fit);
+    fit();
+
+    /* v3.0 手机适配（ADR-010 / mobile.md §5）：
+     * 竖屏遮罩 + GAME 屏暂停；触屏控件事件喂给 Input.touch（TouchSource 纯逻辑） */
+    const mask = document.getElementById('portrait-mask');
+    const applyOrient = () => {
+      this.portrait = window.innerHeight > window.innerWidth;
+      mask.classList.toggle('on', this.portrait);
+    };
+    if (window.matchMedia) {
+      const mq = window.matchMedia('(orientation: portrait)');
+      if (mq.addEventListener) mq.addEventListener('change', applyOrient);
+      else if (mq.addListener) mq.addListener(applyOrient);
+    }
+    window.addEventListener('resize', applyOrient);
+    applyOrient();
+
+    if ('ontouchstart' in window) {          // 仅触屏设备绑定（桌面零开销）
+      const touch = this.input.touch;
+      const toLocal = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (e.clientX - rect.left) / rect.width * CONFIG.VIEW.W,
+          y: (e.clientY - rect.top) / rect.height * CONFIG.VIEW.H,
+        };
+      };
+      canvas.addEventListener('pointerdown', (e) => {
+        const p = toLocal(e);
+        touch.pointerDown(e.pointerId, p.x, p.y);
+      });
+      window.addEventListener('pointermove', (e) => {
+        const p = toLocal(e);
+        touch.pointerMove(e.pointerId, p.x, p.y);
+        this._syncTouchDom();
+      });
+      window.addEventListener('pointerup', (e) => {
+        touch.pointerUp(e.pointerId);
+        this._syncTouchDom();
+      });
+      window.addEventListener('pointercancel', (e) => {
+        touch.pointerUp(e.pointerId);
+        this._syncTouchDom();
+      });
+      this._touchDom = {
+        joyBase: document.getElementById('joy-base'),
+        joyKnob: document.getElementById('joy-knob'),
+        atk: document.getElementById('tbtn-atk'),
+        guard: document.getElementById('tbtn-guard'),
+      };
+    }
+
+    this.stack.push(new TitleScreen(this));   // v2.1 开机屏：点击一次进 MENU，ESC 永不回 TITLE
+    if (!this.store.persistent) this.toast('进度不会保存', 8000);   // menu.md §5.4
+  }
+
+  /* v3.0：触屏控件 DOM 同步（摇杆底座/摇杆头/按钮按下态；mobile.md §4 布局） */
+  _syncTouchDom() {
+    const d = this._touchDom, t = this.input.touch;
+    if (!d) return;
+    const j = t.joystick;
+    if (j.pointerId !== null) {
+      d.joyBase.style.display = 'block';
+      d.joyBase.style.left = (j.origin.x - j.r) + 'px';
+      d.joyBase.style.top = (j.origin.y - j.r) + 'px';
+      const off = j.knobOffset();
+      d.joyKnob.style.display = 'block';
+      d.joyKnob.style.left = (j.origin.x + off.x - 22) + 'px';
+      d.joyKnob.style.top = (j.origin.y + off.y - 22) + 'px';
+    } else {
+      d.joyBase.style.display = 'none';
+      d.joyKnob.style.display = 'none';
+    }
+    d.atk.classList.toggle('down', t.btnAtk.pressed);
+    d.guard.classList.toggle('down', t.btnGuard.pressed);
+  }
+
+  /* v3.0：触屏控件层显隐（GAME 屏才显示；mobile.md §4） */
+  setTouchUI(on) {
+    const el = document.getElementById('touchui');
+    if (el) el.classList.toggle('on', on);
+    this.input.touch.visible = on;
+  }
+
+  /* ---------- DOM 编排 ---------- */
+  _el(id) { return document.getElementById(id); }
+  showScreen(id) { this._el(id).classList.add('on'); }
+  hideScreen(id) { this._el(id).classList.remove('on'); }
+  setHud(lines) {
+    const h = this._el('hud');
+    h.innerHTML = lines.map((l) => '<div>' + l + '</div>').join('');
+    h.style.display = lines.length ? 'block' : 'none';
+  }
+  showConfirm(text, onYes, onNo) {
+    this.confirmOpen = true;
+    this._el('confirm-text').textContent = text;
+    this._yesCb = onYes; this._noCb = onNo;
+    this.showScreen('scr-confirm');
+  }
+  hideConfirm(yes) {
+    this.confirmOpen = false;
+    this.hideScreen('scr-confirm');
+    const cb = yes ? this._yesCb : this._noCb;
+    this._yesCb = this._noCb = null;
+    if (cb) cb();
+  }
+  toast(text, ms) {
+    const t = this._el('toast');
+    t.textContent = text;
+    t.style.display = 'block';
+    clearTimeout(this._toastT);
+    this._toastT = setTimeout(() => { t.style.display = 'none'; }, ms || 2500);
+  }
+
+  /* ---------- 灰显刷新（menu.md §4.3：进入菜单时刷新，不轮询） ---------- */
+  refreshMenu() {
+    this._el('scr-menu').querySelectorAll('.mi').forEach((el) => {
+      const act = el.dataset.act;
+      const ok = isModeAvailable(act, this.store);
+      el.classList.toggle('dis', !ok);
+      el.title = ok ? '' : '暂无可用记录';
+    });
+  }
+
+  /* ---------- 菜单交互（事件在 bootstrap 绑定一次；v3.0 六项 IA） ---------- */
+  onMenuAction(act) {
+    if (!isModeAvailable(act, this.store)) { this.toast('暂未开放'); return; }
+    switch (act) {
+      case 'solo':
+        this.stack.replace(new GameScreen(this, { mode: 'solo' }));
+        break;
+      case 'online':                     // v3.1：配对联机（PAIR 屏：创建/加入）
+        this.stack.replace(new PairScreen(this, 'choose'));
+        break;
+      case 'self': {
+        if (this.store.list('self').length === 0) {
+          // 首进无存档 → 引导走单机挑战：第 2 关胜利 replay 自动回填第 1 关（v2.1 播种收窄）
+          this.toast('暂无记录 —— 先在单机挑战中击败第 2 关的自己', 4000);
+          this.stack.replace(new GameScreen(this, { mode: 'solo' }));
+        } else {
+          const lv = this.store.getProgress('self').unlockedLevel || 1;
+          this.stack.replace(new GameScreen(this, { mode: 'self', level: lv }));
+        }
+        break;
+      }
+      case 'boss_solo':                  // v3.0：单机boss 一级直达（二级屏删除）
+        this.stack.replace(new GameScreen(this, { mode: 'boss_solo', level: 1 }));
+        break;
+      case 'quit':
+        this.showConfirm('确定退出游戏？', () => {
+          window.close();
+          setTimeout(() => {                 // window.close() 被拦截 → 告别画面兜底（menu.md §4.1）
+            if (!window.closed) this.showScreen('scr-farewell');
+          }, 250);
+        }, null);
+        break;
+      default: break;
+    }
+  }
+
+  /* ---------- 主循环 ---------- */
+  update(dt) {
+    const s = this.stack.current;
+    if (s) s.update(dt);
+    if (s && s.ambient && Math.random() < 0.3) this.fx.queue.push({ type: 'ambient' });
+    this.fx.flush();
+    this.fx.update(dt);
+    this.input.endFrame();
+    this.tick = (this.tick || 0) + 1;    // App 全局 tick（对局内消费相对 tick，控制 #11）
+  }
+  render() {
+    const ctx = this.ctx;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+    const s = this.stack.current;
+    if (s) s.renderGame(ctx);
+    if (s && s.ambient) this.fx.render(ctx);   // 菜单氛围粒子层（Match 内部自渲染 fx）
+  }
+  loop(now) {
+    const delta = Math.min((now - this._last || 0) / 1000, 0.25);   // 防死亡螺旋钳制
+    this._last = now;
+    this.accumulator = (this.accumulator || 0) + delta;
+    while (this.accumulator >= CONFIG.STEP) {
+      this.update(CONFIG.STEP);
+      this.accumulator -= CONFIG.STEP;
+    }
+    this.render();
+    requestAnimationFrame((t) => this.loop(t));
+  }
+  start() {
+    this._last = performance.now();
+    requestAnimationFrame((t) => this.loop(t));
+  }
+}
+
+/* ============================================================
+ * Bootstrap（浏览器） / 测试导出（Node）
+ * ============================================================ */
+if (typeof document !== 'undefined') {
+  const app = new App(document.getElementById('game'));
+  // 菜单事件绑定（一次）
+  document.getElementById('scr-menu').addEventListener('click', (e) => {
+    const mi = e.target.closest('.mi');
+    if (mi && !mi.classList.contains('dis')) app.onMenuAction(mi.dataset.act);
+  });
+  // v3.1 PAIR 屏：配对联机全流程按钮（host 生成/复制/确认/开始；guest 加入/复制/占座）
+  const pairEl = (id) => document.getElementById(id);
+  const pairGo = (fn) => Promise.resolve().then(fn).catch(() => {});   // 错误已由屏内 status 呈现
+  pairEl('pair-as-host').addEventListener('click', () => app.stack.replace(new PairScreen(app, 'host')));
+  pairEl('pair-as-guest').addEventListener('click', () => app.stack.replace(new PairScreen(app, 'guest')));
+  pairEl('pair-gen').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s instanceof PairScreen) pairGo(() => s.genInvite());
+  });
+  pairEl('pair-copy').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s instanceof PairScreen && s._lastCode && copyText(s._lastCode)) app.toast('邀请码已复制');
+  });
+  pairEl('pair-confirm').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s instanceof PairScreen) pairGo(() => s.confirmAnswer(pairEl('pair-answer-in').value.trim()));
+  });
+  pairEl('pair-start').addEventListener('click', () => {
+    app.hostRoom.beginCountdown();
+    app.stack.replace(new NetGameScreen(app, 'host'));
+  });
+  pairEl('pair-join').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s instanceof PairScreen) pairGo(() => s.joinWith(pairEl('pair-offer-in').value.trim()));
+  });
+  pairEl('pair-answer-copy').addEventListener('click', () => {
+    const s = app.stack.current;
+    const t = pairEl('pair-answer-out').textContent;
+    if (s instanceof PairScreen && t && copyText(t)) app.toast('应答码已复制');
+  });
+  pairEl('pair-claim-p2').addEventListener('click', () => {
+    const c = app.guestClient;
+    if (!c) return;
+    c.claimSeat('P2').then(() => {
+      app.toast('已占座 P2');
+      pairEl('pair-claim-p2').style.display = 'none';
+    }).catch((err) => app.toast(err.code === 'SEAT_TAKEN' ? 'P2 已被占用' : '占座失败：' + err.code));
+  });
+  pairEl('pair-back').addEventListener('click', () => app.stack.replace(new MenuScreen(app)));
+  document.getElementById('confirm-yes').addEventListener('click', () => app.hideConfirm(true));
+  document.getElementById('confirm-no').addEventListener('click', () => app.hideConfirm(false));
+  // v2.1 开机屏：任意位置点击一次 → MENU（音频 lazy init 同帧生效，控制 #7）
+  document.getElementById('scr-title').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s && s.onClick) s.onClick();
+  });
+
+  /* ---------- v3.0 window.OrbAI：纯控制台 API（无游戏内 UI，打开 DevTools 即可用） ----------
+   * OrbAI.startMatch(opts) → matchId；opts = { p1?, p2?, onEnd?(info) }
+   *   p1/p2: {kind:'builtin'} | {kind:'code', code} | {kind:'human'}（缺省 = P1 human / P2 builtin）
+   *   onEnd info = { winner:'P1'|'P2'|null, hp:{p1,p2}, duration:秒 }
+   * OrbAI.stopMatch(matchId)：中止对局回菜单并注销回调 */
+  window.OrbAI = {
+    _next: 1,
+    _cbs: new Map(),
+    startMatch(opts = {}) {
+      const id = this._next++;
+      const p1 = opts.p1 || { kind: 'human' };
+      const p2 = opts.p2 || { kind: 'builtin' };
+      if (typeof opts.onEnd === 'function') this._cbs.set(id, opts.onEnd);
+      app.stack.replace(new GameScreen(app, { mode: 'demo', p1, p2, matchId: id }));
+      return id;
+    },
+    stopMatch(matchId) {
+      const s = app.stack.current;
+      if (s instanceof GameScreen && s.cfg.mode === 'demo' && s.cfg.matchId === matchId) {
+        if (s.match && !s.match.ended) s.match.abandon();
+        app.stack.replace(new MenuScreen(app));
+      }
+      this._cbs.delete(matchId);
+    },
+    /* GameScreen._onEndDemo 分发通道（info = {winner, hp, duration}） */
+    _dispatch(matchId, info) {
+      const cb = this._cbs.get(matchId);
+      this._cbs.delete(matchId);
+      if (cb) cb(info);
+    },
+
+    /* ---------- v3.1 配对与占座 API（ai-interface.md v3.1；Promise 语义） ---------- */
+    /* 房主端：进 PAIR 屏并生成首张邀请码 → {roomCode}（UI 已同步展示+复制） */
+    createRoom() {
+      return new Promise((resolve, reject) => {
+        app.stack.replace(new PairScreen(app, 'host'));
+        const s = app.stack.current;
+        pairGo(() => s.genInvite()).then(() => {
+          if (s._lastCode) resolve({ roomCode: s._lastCode });
+          else reject(errCode(NET.ERR.PEER_LOST, 'invite generation failed'));
+        }).catch(reject);
+      });
+    },
+    /* 加入端：凭邀请码生成应答码 → {answerCode}（回传房主即完成信令） */
+    joinRoom(roomCode) {
+      return new Promise((resolve, reject) => {
+        app.stack.replace(new PairScreen(app, 'guest'));
+        const s = app.stack.current;
+        pairGo(() => s.joinWith(roomCode)).then((r) => resolve({ answerCode: r.answerCode })).catch(reject);
+      });
+    },
+    /* 房主端：粘贴加入方的应答码 → 配对完成（resolve 于连接建立） */
+    confirmAnswer(answerCode) {
+      return new Promise((resolve, reject) => {
+        const s = app.stack.current;
+        if (!(s instanceof PairScreen) || s.mode !== 'host') { reject(errCode(NET.ERR.PEER_LOST, 'not hosting')); return; }
+        pairGo(() => s.confirmAnswer(answerCode)).then(() => {
+          /* 等待该张 invite 的 chanPromise（NetChannel 建立） */
+          if (s._lastInvite) s._lastInvite.chanPromise.then(() => resolve()).catch(reject);
+          else reject(errCode(NET.ERR.PEER_LOST, 'no pending invite'));
+        }).catch(reject);
+      });
+    },
+    /* 访客端占座：'p1'|'p2'；被占 reject SEAT_TAKEN；断线 reject PEER_LOST */
+    claimSeat(seat) {
+      if (!app.guestClient) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not a guest'));
+      return app.guestClient.claimSeat(seat);
+    },
+    releaseSeat() {
+      if (!app.guestClient) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not a guest'));
+      return app.guestClient.releaseSeat();
+    },
+  };
+
+  app.start();
+} else if (typeof globalThis !== 'undefined') {
+  globalThis.__EXPORTS__ = { CONFIG, Combat, CombatState, Recorder, GhostPlayer,
+                             Player, Dummy, Ball, checkChargeHit, hitCircleOf, adjudicate,
+                             resolveOverlap, Input, FXSystem, Match, TitleScreen,
+                             serializeReplay, deserializeReplay, LocalGhostStore,
+                             onSelfWin, onSelfLose, onBossSoloWin, onBossSoloLose,
+                             selfOutcome, bossSoloOutcome, isModeAvailable, hudLines,
+                             seedOnLevelWin,
+                             /* v3.0：OrbAI 管道（纯控制台 API）+ 触屏纯逻辑（selftest T14/T16） */
+                             AIInput, createBuiltinAI, compileAICode, deepFreeze,
+                             VirtualJoystick, TouchButton, TouchSource,
+                             /* v3.1：WebRTC 配对码联机（selftest T18/T19/T20） */
+                             NET, b64urlEncode, b64urlDecode, packSDP, unpackSDP, buildSDP,
+                             errCode, whenDcOpen, NetChannel, PairingHost, PairingGuest,
+                             NetInputSource, HostRoom, GuestClient };
+}
+
+})();
+

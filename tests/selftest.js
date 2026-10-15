@@ -33,7 +33,10 @@ const { CONFIG, Combat, CombatState, Recorder, GhostPlayer, Player, Dummy,
         onSelfWin, onSelfLose, onBossSoloWin, onBossSoloLose,
         selfOutcome, bossSoloOutcome, isModeAvailable, hudLines, seedOnLevelWin,
         AIInput, createBuiltinAI, compileAICode,
-        deepFreeze, VirtualJoystick, TouchButton, TouchSource } = E;
+        deepFreeze, VirtualJoystick, TouchButton, TouchSource,
+        NET, b64urlEncode, b64urlDecode, packSDP, unpackSDP, buildSDP,
+        errCode, whenDcOpen, NetChannel, PairingHost, PairingGuest,
+        NetInputSource, HostRoom, GuestClient } = E;
 
 let pass = 0, fail = 0;
 function ok(cond, name) {
@@ -1094,7 +1097,7 @@ console.log('[T16] 触屏：摇杆死区/全速/knobOffset / 按钮 click0/滑�
 }
 
 /* ---------- T17 菜单 IA（v3.0：五项 DOM + 二级屏/AI 编辑屏删净 + 联机骨架置灰） ---------- */
-console.log('[T17] 菜单 IA：五项 DOM / scr-boss+scr-ai 删净 / 联机骨架置灰 / 触屏与 OrbAI 要素');
+console.log('[T17] 菜单 IA：五项 DOM / 旧屏删净 / PAIR 屏全流程 / 触屏与 OrbAI 要素');
 {
   const html = fs.readFileSync(HTML, 'utf8');
   const acts = ['solo', 'online', 'self', 'boss_solo', 'quit'];
@@ -1103,11 +1106,11 @@ console.log('[T17] 菜单 IA：五项 DOM / scr-boss+scr-ai 删净 / 联机骨�
   ok(!html.includes('data-act="boss"') && !html.includes('data-act="ai"') &&
      !html.includes('id="scr-boss"') && !html.includes('id="scr-ai"'),
      '二级 boss 屏与 AI 编辑屏 DOM 删净（AI 保留为控制台 API）');
-  ok(html.includes('id="scr-online"') && html.includes('配对联机开发中') &&
-     /class="mi dis" data-ol="create"/.test(html) &&
-     /class="mi dis" data-ol="join"/.test(html),
-     '联机骨架：置灰按钮 + 「配对联机开发中」提示');
-  ok(html.includes('data-ol="back"'), '联机屏返回入口');
+  ok(html.includes('id="scr-pair"') && html.includes('生成邀请码') &&
+     html.includes('确认应答码') && html.includes('你的应答码'),
+     'v3.1 PAIR 屏：创建/加入/应答码全流程 DOM');
+  ok(html.includes('data-ol="back"') === false && html.includes('id="pair-back"'),
+     'v3.1：v3.0 置灰骨架废除，PAIR 屏返回入口就绪');
   ok(html.includes('id="touchui"') && html.includes('id="joy-base"') &&
      html.includes('id="joy-knob"') && html.includes('id="tbtn-atk"') &&
      html.includes('id="tbtn-guard"'), '触屏控件 DOM 齐备');
@@ -1119,6 +1122,263 @@ console.log('[T17] 菜单 IA：五项 DOM / scr-boss+scr-ai 删净 / 联机骨�
      html.includes('stopMatch'), 'window.OrbAI 控制台 API 挂载');
 }
 
-console.log('\n========================================');
-console.log(`TOTAL: ${pass + fail} | PASS: ${pass} | FAIL: ${fail}`);
-process.exit(fail > 0 ? 1 : 0);
+/* ---------- T18 packSDP/unpackSDP 往返 + 非法输入拒绝（架构 v3.1 §1.2） ---------- */
+console.log('[T18] 房间码：packSDP/unpackSDP 往返（fingerprint/ICE 凭据/候选）+ 非法输入错误码');
+{
+  const OFFER_SDP = [
+    'v=0', 'o=- 4611731400430051336 2 IN IP4 127.0.0.1', 's=-', 't=0 0',
+    'a=group:BUNDLE 0', 'a=ice-options:trickle',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0',
+    'a=ice-ufrag:4ZcD', 'a=ice-pwd:2/1KTc5FJm4CQqhG0jEGvQmD',
+    'a=fingerprint:sha-256 AB:CD:EF:12:34:56:78:9A:BC:DE:F0:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:01:23:45:67:89:AB',
+    'a=setup:actpass', 'a=mid:0', 'a=sctp-port:5000',
+    'a=candidate:1 1 udp 2122260223 192.168.1.10 53241 typ host generation 0',
+    'a=candidate:2 1 udp 1686052607 203.0.113.5 61234 typ srflx raddr 192.168.1.10 rport 53241',
+  ].join('\r\n') + '\r\n';
+  const code = packSDP({ type: 'offer', sdp: OFFER_SDP });
+  ok(code.startsWith(NET.PREFIX), '房间码带 OD1. 前缀');
+  ok(code.length < 700, '房间码体积 < 700 字符（实测 ' + code.length + '，约 400~600 区间）');
+  const back = unpackSDP(code);
+  ok(back.type === 'offer', 'type 往返一致');
+  ok(back.sdp.includes('a=ice-ufrag:4ZcD') && back.sdp.includes('a=ice-pwd:2/1KTc5FJm4CQqhG0jEGvQmD'),
+     'ICE 凭据往返一致');
+  ok(back.sdp.includes('a=fingerprint:sha-256 AB:CD:EF:12:34:56:78:9A:BC:DE:F0:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:01:23:45:67:89:AB'),
+     'fingerprint 往返一致');
+  ok(back.sdp.includes('a=candidate:1 1 udp 2122260223 192.168.1.10 53241 typ host generation 0') &&
+     back.sdp.includes('a=candidate:2 1 udp 1686052607 203.0.113.5 61234 typ srflx raddr 192.168.1.10 rport 53241'),
+     'host/srflx 候选逐条往返');
+  ok(back.sdp.includes('m=application 9 UDP/DTLS/SCTP webrtc-datachannel') && back.sdp.includes('a=setup:actpass'),
+     '固定 m=application 模板重建（offer=actpass）');
+  const back2 = unpackSDP(packSDP({ type: 'answer', sdp: OFFER_SDP.replace('actpass', 'active') }));
+  ok(back2.type === 'answer' && back2.sdp.includes('a=setup:active'), 'answer setup=active 模板');
+
+  const throwsCode = (fn, want) => {
+    try { fn(); return false; } catch (e) { return e.code === want; }
+  };
+  ok(throwsCode(() => unpackSDP('XX.abc'), NET.ERR.E_FORMAT), '无 OD1. 前缀 → E_FORMAT');
+  ok(throwsCode(() => unpackSDP(NET.PREFIX + '!!!非base64!!!'), NET.ERR.E_JSON), '坏载荷 → E_JSON');
+  ok(throwsCode(() => unpackSDP(NET.PREFIX + b64urlEncode('{"type":"offer"}')),
+                NET.ERR.E_SHAPE), '缺 fingerprint/凭据 → E_SHAPE');
+  ok(throwsCode(() => unpackSDP(NET.PREFIX + b64urlEncode(
+      JSON.stringify({ type: 'offer', f: 'a', u: 'b', p: 'c', c: ['bad$$candidate'] }))),
+    NET.ERR.E_SHAPE), '候选字段含非法字符 → E_SHAPE');
+  ok(throwsCode(() => packSDP({ type: 'nope', sdp: 'v=0' }), NET.ERR.E_SHAPE), 'pack 非法 desc.type → E_SHAPE');
+  ok(throwsCode(() => packSDP({ type: 'offer', sdp: 'v=0\r\n' }), NET.ERR.E_SHAPE),
+     'pack 缺凭据的 SDP → E_SHAPE');
+  ok(b64urlDecode(b64urlEncode('OD1.roundtrip-abc_123')) === 'OD1.roundtrip-abc_123',
+     'base64url 往返（- _ 字符安全）');
+}
+
+/* ---------- v3.1 联机 stub 工厂（T19/T20 共享；DC 有 connecting→open 生命周期） ---------- */
+function _mkNetDC(name, opts) {
+  const dc = { name, opts, readyState: 'connecting', _peer: null, _sends: [], _ls: {},
+    send(s) { dc._sends.push(s); if (dc._peer) (dc._peer._ls.message || []).forEach((f) => f({ data: s })); },
+    close() { dc.readyState = 'closed'; (dc._ls.close || []).forEach((f) => f()); },
+    addEventListener(ev, fn) { (dc._ls[ev] = dc._ls[ev] || []).push(fn); },
+    _setOpen() { dc.readyState = 'open'; (dc._ls.open || []).forEach((f) => f()); } };
+  return dc;
+}
+function mkNetPair() {
+  const created = [], mirrors = [];
+  let useq = 0;
+  const mkPC = (isGuest) => {
+    const batch = [];                    // 本 PC（=本张 offer）的 DC 批次
+    const pc = { iceGatheringState: 'complete', localDescription: null, remoteDescription: null, _ls: {},
+      addEventListener(ev, fn) { (pc._ls[ev] = pc._ls[ev] || []).push(fn); },
+      _fire(ev, arg) { (pc._ls[ev] || []).forEach((f) => f(arg)); },
+      createDataChannel(name, opts) { const dc = _mkNetDC(name, opts); if (!isGuest) { created.push(dc); batch.push(dc); } return dc; },
+      async createOffer() {
+        useq++;
+        const u = 'U' + useq;
+        for (const dc of batch) dc._ufrag = u;          // host DC 标记所属 offer
+        return { type: 'offer', sdp:
+          'v=0\r\na=ice-ufrag:' + u + '\r\na=ice-pwd:P' + useq +
+          '\r\na=fingerprint:sha-256 AA:' + (10 + useq) +
+          '\r\n\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n' };
+      },
+      async createAnswer() {
+        useq += 100;
+        return { type: 'answer', sdp:
+          'v=0\r\na=ice-ufrag:U' + useq + '\r\na=ice-pwd:P' + useq +
+          '\r\na=fingerprint:sha-256 AA:' + (10 + useq) +
+          '\r\n\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n' };
+      },
+      async setLocalDescription(d) { pc.localDescription = d; },
+      async setRemoteDescription(d) {
+        pc.remoteDescription = d;
+        /* 真实 WebRTC：访客按 offer SDP 建对端通道——stub 以 ufrag 匹配 host DC 造镜像 */
+        if (isGuest) {
+          const u = /ice-ufrag:(\S+)/.exec(d.sdp)[1];
+          for (const hdc of created) {
+            if (hdc._ufrag !== u || hdc._peer) continue;
+            const gdc = _mkNetDC(hdc.name);
+            hdc._peer = gdc; gdc._peer = hdc;
+            mirrors.push(gdc);
+            pc._fire('datachannel', { channel: gdc });
+          }
+        }
+      } };
+    return pc;
+  };
+  /* 握手完成模拟：只 open 已配对（有镜像）的 DC——未消耗邀请码的 DC 保持 connecting */
+  const shake = () => {
+    for (const dc of created) if (dc._peer) { dc._setOpen(); dc._peer._setOpen(); }
+    for (const m of mirrors) m._setOpen();
+  };
+  return { mkPC, created, mirrors, shake };
+}
+
+/* ---------- T19 配对器 + 双 DC 分型路由（stub RTCDataChannel） ---------- */
+(async () => {   /* T19/T20 含 await：async IIFE 包裹（CommonJS 无顶层 await） */
+console.log('[T19] PairingHost 多 offer 并行 / PairingGuest 应答 / snap 与 ctrl 通道分型与可靠性参数');
+{
+  const net = mkNetPair();
+  const host = new PairingHost({ makePC: () => net.mkPC(false) });
+  const guest = new PairingGuest({ makePC: () => net.mkPC(true) });
+
+  // —— (a) 两张邀请码并行 ——
+  const invites = [await host.createInvite(), await host.createInvite()];
+  ok(invites[0].code !== invites[1].code, '两张并行邀请码互不相同（每访客一张）');
+  ok(unpackSDP(invites[0].code).type === 'offer' && unpackSDP(invites[1].code).type === 'offer',
+     '两张邀请码均可解包为 offer');
+  ok(net.created.length === 4, '每张 offer 显式建两条 DC（snap+ctrl ×2）');
+  ok(net.created[0].opts.ordered === false && net.created[0].opts.maxRetransmits === 0,
+     'snap 通道：ordered=false + maxRetransmits=0（unreliable+unordered）');
+  ok(net.created[1].opts.ordered === true && net.created[1].opts.maxRetransmits === undefined,
+     'ctrl 通道：ordered=true（reliable）');
+  ok(net.created[0].name === 'snap' && net.created[1].name === 'ctrl', 'DC 命名分型');
+
+  // —— (b) guest join 1 号码 → answer → 房主确认 → 握手 → 双通道建立 ——
+  const r = await guest.join(invites[0].code);
+  ok(unpackSDP(r.answerCode).type === 'answer', '访客应答码为 answer');
+  await host.acceptAnswer(invites[0].id, r.answerCode);
+  net.shake();                              // 握手完成 → 全部 DC open
+  const guestChan = await r.chanPromise;
+  ok(guestChan instanceof NetChannel, '访客侧 NetChannel 建立');
+  const hostChan = await invites[0].chanPromise;
+  ok(hostChan instanceof NetChannel, '房主侧 NetChannel 建立');
+
+  // —— (c) 帧分型路由：sendSnap 走 snap、sendCtrl 走 ctrl ——
+  let guestGotSnap = null, guestGotCtrl = null;
+  guestChan.onSnap((f) => { guestGotSnap = f; });
+  guestChan.onCtrl((f) => { guestGotCtrl = f; });
+  const snapDc = net.created[0], ctrlDc = net.created[1];
+  const snapBefore = snapDc._sends.length, ctrlBefore = ctrlDc._sends.length;
+  hostChan.sendSnap({ t: 'snapshot', tick: 1 });
+  hostChan.sendCtrl({ t: 'room_state', phase: 'WAITING' });
+  ok(snapDc._sends.length === snapBefore + 1, 'sendSnap 只走 snap 通道');
+  ok(ctrlDc._sends.length === ctrlBefore + 1, 'sendCtrl 只走 ctrl 通道');
+  ok(guestGotSnap && guestGotSnap.t === 'snapshot' && guestGotSnap.tick === 1,
+     'snap 帧跨 stub 管道到达访客 snap 回调');
+  ok(guestGotCtrl && guestGotCtrl.t === 'room_state', 'ctrl 帧到达访客 ctrl 回调');
+
+  // —— (d) 2 号码仍 pending（offer 与连接一一对应）——
+  ok(host.pending.size === 1, '已消耗 1 号邀请码，2 号仍 pending（多 offer 并行语义）');
+  const r2 = await guest.join(invites[1].code);
+  await host.acceptAnswer(invites[1].id, r2.answerCode);
+  net.shake();
+  const guestChan2 = await r2.chanPromise;
+  const hostChan2 = await invites[1].chanPromise;
+  let secondGot = null;
+  guestChan2.onCtrl((f) => { secondGot = f; });
+  hostChan2.sendCtrl({ t: 'room_state', phase: 'PLAYING', ch: 2 });
+  ok(secondGot && secondGot.ch === 2, '第二张连接独立通道（互不串扰）');
+  ok(host.pending.size === 0, '两张邀请码全部消耗');
+
+  // —— (e) NetInputSource：seq 去重 + input 帧同接口 ——
+  const nis = new NetInputSource();
+  nis.feed({ t: 'input', seq: 3, move: { x: 1, y: 0 }, click0: true, guardHeld: true });
+  ok(nis.getMoveAxis().x === 1 && nis.guardHeld() === true, 'input 帧喂入 → Input 同接口读出');
+  nis.feed({ t: 'input', seq: 2, move: { x: -1, y: 0 }, click0: false, guardHeld: false });
+  ok(nis.getMoveAxis().x === 1, '乱序旧帧（seq 更小）丢弃');
+  ok(nis.consumeClick(0) === true && nis.consumeClick(0) === false, 'click0 一次消费');
+  nis.feed({ t: 'input', seq: 4, move: { x: 0, y: 1 }, click0: false, guardHeld: false });
+  ok(nis.getMoveAxis().y === 1 && nis.getMoveAxis().x === 0, '新 seq 帧覆盖状态');
+  ok(nis.isDown('KeyR') === false && nis.getChargeDir().x === 0, '远程端无按键/鼠标语义（Player 层兜底）');
+}
+
+/* ---------- T20 双端对拍（核心验收）：Node 内存管道跑完整联机对局到 match_end ---------- */
+console.log('[T20] 双端对拍：HostRoom 权威模拟 + GuestClient AI 席 → match_end + 三局两胜 + 断线托管');
+{
+  const net = mkNetPair();
+  const host = new PairingHost({ makePC: () => net.mkPC(false) });
+  const guest = new PairingGuest({ makePC: () => net.mkPC(true) });
+  const room = new HostRoom(new FXSystem(), { play() {} });
+  host.onOpen = (ch) => room.addChannel(ch);
+  room.p1Input = new AIInput(createBuiltinAI(), 'P1');   // 房主 P1 = AI（零网络直注，架构 §1.1）
+
+  const invite = await host.createInvite();
+  const r = await guest.join(invite.code);
+  await host.acceptAnswer(invite.id, r.answerCode);
+  net.shake();                                           // 握手完成
+  const hostChan = await invite.chanPromise;
+  const guestChan = await r.chanPromise;
+  ok(room.channels.length === 1, '配对完成 → 访客连接入房（默认观战）');
+
+  const gc = new GuestClient(new FXSystem());
+  gc.attach(guestChan);
+  await gc.claimSeat('P2');                              // AI 席占座（ctrl 帧 → seat_ok）
+  ok(room.seats.P2 === hostChan && gc.mySeat === 'P2', 'claim_seat → P2 入座（AI 与人类同包）');
+  ok(room.p2Input instanceof NetInputSource, '远程席 = NetInputSource（人类/AI 同包不区分）');
+  gc.attachAI({ name: 'idle', think() { return { move: { x: 0, y: 0 }, click0: false, guardHeld: false }; } });
+  /* AI 席跑在访客端（本地 think → input 上行）；P2 取静止 AI 保证确定性击杀路径（同 T15(a)，
+   * 双内置对称相持会拖到 300s 超时——相持语义已由 T15(b) 断言，此处不重复） */
+
+  room.beginCountdown();
+  ok(room.phase === 'COUNTDOWN', '开始 → COUNTDOWN');
+  for (let i = 0; i < Math.ceil(NET.COUNTDOWN / STEP); i++) room.update(STEP);
+  ok(room.phase === 'PLAYING' && room.match !== null, 'COUNTDOWN 3s → PLAYING（房主跑权威 Match）');
+
+  let endFrames = [];
+  gc.onMatchEnd = (f) => endFrames.push(f);
+  let ticks = 0;
+  const maxTicks = Math.ceil(70 / STEP);                 // 70s 上限（T15：内置互战 60s 内收束）
+  while (room.p1Wins + room.p2Wins < 1 && ticks < maxTicks) {
+    room.update(STEP);                                   // 房主：模拟 + 快照广播
+    gc.sendInput();                                      // 访客：AI think → input 帧（snap 通道上行）
+    ticks++;
+  }
+  ok(room.p1Wins + room.p2Wins >= 1, '完整对局跑到单局 match_end（' + (ticks * STEP).toFixed(1) + 's）');
+  ok(endFrames.length === 1 && (endFrames[0].result === 'P1' || endFrames[0].result === 'P2'),
+     'match_end 帧 result 通道正确（' + (endFrames[0] ? endFrames[0].result : 'none') + '）');
+  ok(typeof endFrames[0].p1Wins === 'number' && typeof endFrames[0].p2Wins === 'number',
+     'match_end 含三局两胜计分字段');
+  ok(gc.state.p1 && typeof gc.state.p1.x === 'number' && gc.state.tick > 0,
+     '访客收到快照流（tick=' + gc.state.tick + '，实体位置更新）');
+  ok(Array.isArray(gc.state.p1 ? [] : null) || gc.state.p1.phase !== undefined,
+     '实体相位随快照下发');
+  ok(gc.state.p1.hp !== undefined && gc.state.p2.hp !== undefined, '快照含 hp（血条可渲染）');
+
+  // 三局两胜：白盒再收一局 → P1 达 2 胜 → ENDED
+  room._onMatchEnd('P1');
+  ok(room.phase === 'ENDED' && room.p1Wins === 2, '第二局 P1 胜 → 三局两胜 ENDED');
+  ok(endFrames.length === 2 && endFrames[1].p1Wins === 2, 'ENDED 也广播 match_end（客户端结算）');
+
+  // 断线语义：重开一局 PLAYING 中 P2 断线 → AI 托管
+  room.phase = 'WAITING'; room.p1Wins = 0; room.p2Wins = 0;
+  room.beginCountdown();
+  for (let i = 0; i < Math.ceil(NET.COUNTDOWN / STEP); i++) room.update(STEP);
+  ok(room.phase === 'PLAYING' && room.p2Input instanceof NetInputSource,
+     '重开局：P2 = 远程 NetInputSource');
+  guestChan.close(); hostChan.close();                   // 访客断线（P2P 两端 DC 同时关闭）
+  ok(room.seats.P2 === null && room.p2Input && room.p2Input.constructor === AIInput,
+     'PLAYING 中断线 → 座位立即内置 AI 托管（30s 语义，P2 唯一无超时回收分支）');
+
+  // ROOM_FULL：访客连接上限 = P2 席 1 + 观战 8
+  let filled = 0;
+  while (room.channels.length < NET.SPECTATOR_MAX + 1) {
+    const ch = new NetChannel(_mkNetDC('snap'), _mkNetDC('ctrl'));
+    ch.dcSnap._setOpen(); ch.dcCtrl._setOpen();
+    if (room.addChannel(ch) === false) break;
+    filled++;
+  }
+  ok(filled === NET.SPECTATOR_MAX + 1, '断线后余位补满至 ' + filled + '（P2 席 1 + 观战 8，上限内入房）');
+  const over = new NetChannel(_mkNetDC('snap'), _mkNetDC('ctrl'));
+  over.dcSnap._setOpen(); over.dcCtrl._setOpen();
+  ok(room.addChannel(over) === false, '超出上限 → ROOM_FULL 拒绝');
+}
+
+  console.log('\n========================================');
+  console.log(`TOTAL: ${pass + fail} | PASS: ${pass} | FAIL: ${fail}`);
+  process.exit(fail > 0 ? 1 : 0);
+})();

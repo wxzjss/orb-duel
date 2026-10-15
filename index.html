@@ -67,15 +67,45 @@
     <div class="mi" data-act="boss_solo">单机boss</div>
     <div class="mi" data-act="quit">退出游戏</div>
   </div>
-  <div class="scr" id="scr-online">
-    <div class="title">联 机 对 战</div>
-    <div style="color:rgba(255,255,255,.7);font-size:14px;line-height:1.8;text-align:center;margin-bottom:8px;">
-      配对联机开发中<br>
-      <span style="color:rgba(255,255,255,.45);font-size:12px;">WebRTC 配对方案筹备中（E-41 架构补丁后上线）</span>
+  <div class="scr" id="scr-pair">
+    <div class="title">配 对 联 机</div>
+    <div id="pair-status" style="color:#d9a441;font-size:14px;min-height:22px;letter-spacing:1px;"></div>
+    <!-- 模式选择 -->
+    <div id="pair-choose">
+      <div class="mi" id="pair-as-host">创建房间（你是房主）</div>
+      <div class="mi" id="pair-as-guest">加入房间</div>
     </div>
-    <div class="mi dis" data-ol="create">创建房间</div>
-    <div class="mi dis" data-ol="join">加入房间</div>
-    <div class="mi" data-ol="back">返回</div>
+    <!-- 房主侧 -->
+    <div id="pair-host" style="display:none;">
+      <div class="mi" id="pair-gen">生成邀请码</div>
+      <div id="pair-code" style="color:#7fd8e8;font-size:13px;font-family:monospace;max-width:86%;
+           margin:8px auto;word-break:break-all;min-height:20px;background:rgba(0,0,0,.35);
+           padding:8px;border-radius:6px;display:none;"></div>
+      <div class="mi" id="pair-copy" style="display:none;">复制邀请码</div>
+      <div style="color:rgba(255,255,255,.6);font-size:13px;margin:6px 0;">把邀请码发给对方，粘贴对方回传的应答码：</div>
+      <input id="pair-answer-in" placeholder="粘贴应答码"
+             style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);color:#fff;padding:8px 10px;border-radius:6px;width:420px;max-width:80%;font-size:13px;font-family:monospace;">
+      <div class="mi" id="pair-confirm">确认应答码</div>
+      <div id="pair-peers" style="color:rgba(255,255,255,.75);font-size:14px;margin-top:8px;line-height:1.8;"></div>
+      <div class="mi" id="pair-start">开始对局</div>
+      <div style="color:rgba(255,255,255,.4);font-size:12px;margin-top:6px;">房主为权威端 · 房主退出即全房结束 · 邀请码请勿公开传播</div>
+    </div>
+    <!-- 访客侧 -->
+    <div id="pair-guest" style="display:none;">
+      <div style="color:rgba(255,255,255,.6);font-size:13px;">粘贴房主的邀请码：</div>
+      <input id="pair-offer-in" placeholder="粘贴邀请码"
+             style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);color:#fff;padding:8px 10px;border-radius:6px;width:420px;max-width:80%;font-size:13px;font-family:monospace;">
+      <div class="mi" id="pair-join">加入房间</div>
+      <div style="color:rgba(255,255,255,.6);font-size:13px;margin:10px 0 4px;">你的应答码（回传给房主）：</div>
+      <div id="pair-answer-out" style="color:#7fd8e8;font-size:13px;font-family:monospace;max-width:86%;
+           margin:4px auto;word-break:break-all;min-height:20px;background:rgba(0,0,0,.35);
+           padding:8px;border-radius:6px;display:none;"></div>
+      <div class="mi" id="pair-answer-copy" style="display:none;">复制应答码</div>
+      <div id="pair-wait" style="color:rgba(255,255,255,.6);font-size:13px;display:none;">等待房主确认…</div>
+      <div class="mi" id="pair-claim-p2" style="display:none;">占座 P2</div>
+    </div>
+    <div class="mi" id="pair-back">返回</div>
+    <div style="color:rgba(255,255,255,.35);font-size:12px;">NAT 受限网络可能无法穿透——届时请在同一局域网内使用</div>
   </div>
   <div class="scr" id="scr-result">
     <div class="title" id="result-title"></div>
@@ -821,6 +851,7 @@ class FXSystem {
     this.freeList = [];               // 索引栈
     for (let i = CONFIG.FX.POOL - 1; i >= 0; i--) this.freeList.push(i);
     this.queue = [];                  // 逻辑期只入队，帧末 flush（控制 #2）
+    this.lastEmitted = [];            // v3.1：flush 前的帧事件副本（联机快照 events 字段来源）
     this.afterimages = [];            // I-40：冲撞残影（v1.0 特效风格语言：球体轮廓快照）
     this.speedlines = [];             // I-40：起手径向速度线（2 帧消散）
     this.rings = [];                  // 冲击环（r0→r1）：死亡爆裂 / 格挡眩晕 / 对撞弹开
@@ -942,6 +973,7 @@ class FXSystem {
   }
 
   flush() {                            // Game 帧末调用：队列 → 发射
+    this.lastEmitted = this.queue.map((ev) => ({ ...ev }));   // v3.1：联机广播源（HostRoom 逐帧读取，浅拷贝防引用逃逸）
     for (const ev of this.queue) this.emit(ev);
     this.queue.length = 0;
   }
@@ -1912,6 +1944,520 @@ class Match {
 }
 
 /* ============================================================
+ * §10.5 Net —— WebRTC 配对码联机（ADR-008 修订 + ADR-011）
+ * 拓扑：星型，权威端 = 房主浏览器（跑 demo 形态 Match）；信令 = 手动配对码
+ * （packSDP/unpackSDP 压缩 SDP 交换）；传输 = 双 DataChannel 分型：
+ *   snap（maxRetransmits:0）：input ↑ / snapshot ↓ —— seq 去重容忍乱序丢帧
+ *   ctrl（reliable+ordered）：claim_seat / start / room_state / match_end / leave
+ * 帧格式沿用架构 v3.0 §1.4（token 字段废除），传输层迁移表照 v3.1 §2。
+ * ============================================================ */
+const NET = {
+  PREFIX: 'OD1.',
+  STUN: 'stun:stun.l.google.com:19302',
+  SPECTATOR_MAX: 8,
+  COUNTDOWN: 3.0,
+  AI_TAKEOVER: 30.0,                 // PLAYING 中断线座位 AI 托管时长（modes.md v3.1）
+  ERR: { E_FORMAT: 'E_FORMAT', E_JSON: 'E_JSON', E_SHAPE: 'E_SHAPE',
+         SEAT_TAKEN: 'SEAT_TAKEN', PEER_LOST: 'PEER_LOST', ROOM_FULL: 'ROOM_FULL' },
+};
+
+/* ---------- base64url（ASCII 安全；浏览器/Node 均有 btoa/atob） ---------- */
+function b64urlEncode(s) {
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s) {
+  let t = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (t.length % 4) t += '=';
+  return atob(t);
+}
+
+/* ---------- 房间码 = 压缩 SDP（关键字段抽取 / 固定模板重建） ----------
+ * 仅支持本引擎自己生成的 offer/answer 形状；非法输入按错误码抛错。
+ * fields: { type, f(fingerprint), u(ice-ufrag), p(ice-pwd), c:[candidate 原文…] } */
+function packSDP(desc) {
+  if (!desc || (desc.type !== 'offer' && desc.type !== 'answer') || typeof desc.sdp !== 'string') {
+    const e = new Error('packSDP: invalid desc'); e.code = NET.ERR.E_SHAPE; throw e;
+  }
+  const fields = { type: desc.type, f: '', u: '', p: '', c: [] };
+  let fpSeen = false;
+  for (const line of desc.sdp.split(/\r?\n/)) {
+    let m;
+    if (!fpSeen && (m = line.match(/^a=fingerprint:\s*(\S+)\s+(\S+)$/))) {
+      fields.f = m[1] + ' ' + m[2]; fpSeen = true;         // 只取一条（多 m 行同凭据）
+    } else if (!fields.u && (m = line.match(/^a=ice-ufrag:\s*(\S+)$/))) {
+      fields.u = m[1];
+    } else if (!fields.p && (m = line.match(/^a=ice-pwd:\s*(\S+)$/))) {
+      fields.p = m[1];
+    } else if ((m = line.match(/^a=candidate:\s*(.+)$/))) {
+      fields.c.push(m[1].trim());
+    }
+  }
+  if (!fields.f || !fields.u || !fields.p) {
+    const e = new Error('packSDP: missing fingerprint/ice credentials');
+    e.code = NET.ERR.E_SHAPE; throw e;
+  }
+  return NET.PREFIX + b64urlEncode(JSON.stringify(fields));
+}
+
+/* 固定 m=application 单行模板重建（DataChannel-only SDP） */
+function buildSDP(fields) {
+  const setup = fields.type === 'offer' ? 'actpass' : 'active';
+  const lines = [
+    'v=0',
+    'o=- 4611731400430051336 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE 0',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 0.0.0.0',
+    'a=ice-ufrag:' + fields.u,
+    'a=ice-pwd:' + fields.p,
+    'a=fingerprint:' + fields.f,
+    'a=setup:' + setup,
+    'a=mid:0',
+    'a=sctp-port:5000',
+    'a=max-message-size:262144',
+  ];
+  for (const c of fields.c) lines.push('a=candidate:' + c);
+  return lines.join('\r\n') + '\r\n';
+}
+
+function unpackSDP(code) {
+  if (typeof code !== 'string' || !code.startsWith(NET.PREFIX)) {
+    const e = new Error('unpackSDP: bad prefix'); e.code = NET.ERR.E_FORMAT; throw e;
+  }
+  let fields;
+  try { fields = JSON.parse(b64urlDecode(code.slice(NET.PREFIX.length))); }
+  catch (err) { const e = new Error('unpackSDP: bad payload'); e.code = NET.ERR.E_JSON; throw e; }
+  if (!fields || (fields.type !== 'offer' && fields.type !== 'answer') ||
+      typeof fields.f !== 'string' || !fields.f ||
+      typeof fields.u !== 'string' || !fields.u ||
+      typeof fields.p !== 'string' || !fields.p || !Array.isArray(fields.c)) {
+    const e = new Error('unpackSDP: missing fields'); e.code = NET.ERR.E_SHAPE; throw e;
+  }
+  for (const c of fields.c) {
+    if (typeof c !== 'string' || !/^[\w .:+-]+$/.test(c)) {
+      const e = new Error('unpackSDP: bad candidate'); e.code = NET.ERR.E_SHAPE; throw e;
+    }
+  }
+  return { type: fields.type, sdp: buildSDP(fields) };
+}
+
+/* ---------- NetChannel：一条访客连接（双 DC 分型封装；stub 兼容） ----------
+ * 上层只认 sendSnap/sendCtrl/onSnap/onCtrl/onClose/close，DC 实现可注入。 */
+class NetChannel {
+  /* dcSnap/dcCtrl：RTCDataChannel-like（含 maxRetransmits 可静态检查） */
+  constructor(dcSnap, dcCtrl) {
+    this.dcSnap = dcSnap; this.dcCtrl = dcCtrl;
+    this.open = dcSnap.readyState === undefined || dcSnap.readyState === 'open';
+    this._onSnap = null; this._onCtrl = null; this._onClose = null;
+    const wire = (dc, cb) => {
+      if (!dc) return;
+      if (dc.addEventListener) {
+        dc.addEventListener('message', (e) => { if (cb) cb(JSON.parse(e.data)); });
+        dc.addEventListener('close', () => { this.open = false; if (this._onClose) this._onClose(); });
+      } else {                                   // stub：直接赋 onmessage/onclose
+        dc.onmessage = (e) => { if (cb) cb(JSON.parse(e.data)); };
+        dc.onclose = () => { this.open = false; if (this._onClose) this._onClose(); };
+      }
+    };
+    wire(dcSnap, (f) => { if (this._onSnap) this._onSnap(f); });
+    wire(dcCtrl, (f) => { if (this._onCtrl) this._onCtrl(f); });
+  }
+  sendSnap(frame) { if (this.open) this.dcSnap.send(JSON.stringify(frame)); }
+  sendCtrl(frame) { if (this.open) this.dcCtrl.send(JSON.stringify(frame)); }
+  onSnap(cb) { this._onSnap = cb; }
+  onCtrl(cb) { this._onCtrl = cb; }
+  onClose(cb) { this._onClose = cb; }
+  close() { this.open = false; try { this.dcSnap.close(); } catch (e) {} try { this.dcCtrl.close(); } catch (e) {} if (this._onClose) this._onClose(); }
+}
+
+/* ---------- 浏览器 PeerConnection 工厂（真实 WebRTC；Node 测试注入 stub） ---------- */
+function makeRealPC() {
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: NET.STUN }] });
+  return pc;
+}
+/* 建 DC 对：offer 方显式创建（参数即分型契约），answer 方按收到的 negotiation 建立 */
+function hostDataChannels(pc) {
+  const snap = pc.createDataChannel('snap', { ordered: false, maxRetransmits: 0 });
+  const ctrl = pc.createDataChannel('ctrl', { ordered: true });
+  return { snap, ctrl };
+}
+/* 等 DataChannel open（stub 无 readyState 字段视为已开） */
+function whenDcOpen(dc, ms) {
+  return new Promise((resolve, reject) => {
+    if (!dc || dc.readyState === undefined || dc.readyState === 'open') { resolve(); return; }
+    const t = setTimeout(() => reject(errCode(NET.ERR.PEER_LOST, 'dc open timeout')), ms || 10000);
+    dc.addEventListener('open', () => { clearTimeout(t); resolve(); }, { once: true });
+    dc.addEventListener('close', () => { clearTimeout(t); reject(errCode(NET.ERR.PEER_LOST, 'dc closed')); }, { once: true });
+  });
+}
+function errCode(code, msg) { const e = new Error(code + ': ' + msg); e.code = code; return e; }
+/* 等 ICE gathering complete（手动配对无 trickle）；8s 超时保底出码 */
+function waitIceComplete(pc, ms) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    const t = setTimeout(() => { pc.removeEventListener('icegatheringstatechange', ch); resolve(); }, ms || 8000);
+    const ch = () => {
+      if (pc.iceGatheringState === 'complete') {
+        clearTimeout(t); pc.removeEventListener('icegatheringstatechange', ch); resolve();
+      }
+    };
+    pc.addEventListener('icegatheringstatechange', ch);
+  });
+}
+
+/* ---------- PairingHost：房主侧（多张并行 pending offer，每访客一张） ---------- */
+class PairingHost {
+  /* deps: {makePC?}——Node 测试注入 stub 工厂；返回 {pc, chans?, waitOpen} */
+  constructor(deps) {
+    this.makePC = (deps && deps.makePC) || makeRealPC;
+    this.pending = new Map();        // inviteId → {pc, chans, answer, resolveOpen}
+    this.onOpen = null;              // (channel) => void（连接建立回调，Room 挂钩）
+  }
+  /* 生成一张邀请码（等 ICE gathering complete；非法环境错误如实抛出） */
+  async createInvite() {
+    const pc = this.makePC();
+    const chans = hostDataChannels(pc);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitIceComplete(pc);
+    const id = 'I' + (this._seq = (this._seq || 0) + 1);
+    const entry = { pc, chans, id };
+    this.pending.set(id, entry);
+    /* 连接建立 = 双 DC open（真实 WebRTC）；stub DC 无 readyState 即达 */
+    const chanPromise = Promise.all([whenDcOpen(chans.snap), whenDcOpen(chans.ctrl)])
+      .then(() => {
+        this.pending.delete(id);
+        const ch = new NetChannel(chans.snap, chans.ctrl);
+        if (this.onOpen) this.onOpen(ch);
+        return ch;
+      })
+      .catch((err) => { this.pending.delete(id); throw err; });
+    return { code: packSDP(pc.localDescription), id, chanPromise };
+  }
+  /* 粘贴访客应答码 → 完成该张 offer 的配对（真实 WebRTC 由 SDP 交换驱动建连） */
+  async acceptAnswer(id, answerCode) {
+    const entry = this.pending.get(id);
+    if (!entry) throw errCode(NET.ERR.PEER_LOST, 'no such invite');
+    const desc = unpackSDP(answerCode);
+    if (desc.type !== 'answer') throw errCode(NET.ERR.E_SHAPE, 'not an answer');
+    await entry.pc.setRemoteDescription(desc);
+    if (entry.pc.onanswer) entry.pc.onanswer();   // stub 钩子：测试手动驱动建连
+  }
+}
+
+/* ---------- PairingGuest：访客侧（粘贴 offer → 应答码） ---------- */
+class PairingGuest {
+  constructor(deps) {
+    this.makePC = (deps && deps.makePC) || makeRealPC;
+  }
+  async join(offerCode) {
+    const offer = unpackSDP(offerCode);
+    if (offer.type !== 'offer') throw errCode(NET.ERR.E_SHAPE, 'not an offer');
+    const pc = this.makePC();
+    this.pc = pc;
+    /* 先注册 datachannel 收集（事件可能在 setRemote 同步/异步派发；按名字分型） */
+    const got = {};
+    const chansReady = new Promise((resolve, reject) => {
+      pc.addEventListener('datachannel', (e) => {
+        got[e.channel.name] = e.channel;
+        if (got.snap && got.ctrl) resolve(got);
+      });
+      setTimeout(() => reject(errCode(NET.ERR.PEER_LOST, 'datachannel timeout')), 10000);
+    });
+    /* 真实 WebRTC 时序：setRemoteDescription(offer) 触发 ondatachannel */
+    await pc.setRemoteDescription(offer);
+    const chans = await chansReady;
+    this.chans = chans;
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitIceComplete(pc);
+    const chanPromise = Promise.all([whenDcOpen(chans.snap), whenDcOpen(chans.ctrl)])
+      .then(() => new NetChannel(chans.snap, chans.ctrl));
+    return { answerCode: packSDP(pc.localDescription), chanPromise };
+  }
+}
+
+/* ---------- NetInputSource：远程 input 帧 → Input 同接口（房主端 P2 席） ----------
+ * seq 去重（乱序容忍）：只消费 seq 更大的帧；每帧带全量状态，无 HOL 阻塞。 */
+class NetInputSource {
+  constructor() {
+    this._lastSeq = -1; this._move = { x: 0, y: 0 };
+    this._clickPending = false; this._clickConsumed = true; this._guard = false;
+  }
+  /* onInput 回调挂 NetChannel.onSnap 的 input 帧分流 */
+  feed(frame) {
+    if (!frame || frame.t !== 'input') return;
+    if (frame.seq <= this._lastSeq) return;          // 旧/重帧丢弃
+    this._lastSeq = frame.seq;
+    this._move = frame.move || { x: 0, y: 0 };
+    if (frame.click0) { this._clickPending = true; this._clickConsumed = false; }
+    this._guard = !!frame.guardHeld;
+  }
+  getMoveAxis() { return this._move; }
+  getChargeDir() { return { x: 0, y: 0 }; }          // 远程无鼠标语义；Player 层朝对手兜底
+  consumeClick(btn) {
+    if (btn !== 0) return false;
+    if (this._clickConsumed) return false;
+    this._clickConsumed = true; return this._clickPending;
+  }
+  guardHeld() { return this._guard; }
+  isDown() { return false; }
+  endFrame() { this._clickPending = false; }
+}
+
+/* ---------- HostRoom：权威端房间（WAITING→COUNTDOWN→PLAYING→ENDED，三局两胜） ---------- */
+class HostRoom {
+  constructor(fx, audio) {
+    this.fx = fx; this.audio = audio || { play() {} };
+    this.phase = 'WAITING';
+    this.channels = [];               // 全部连接（含观战）
+    this.seats = { P1: null, P2: null };   // P1=本地（human/AI 由外部注入），P2=channel|null
+    this.p1Input = null; this.p2Input = null;   // human: app.input / AI: AIInput / 远程: NetInputSource
+    this.match = null;
+    this.p1Wins = 0; this.p2Wins = 0;
+    this._countdown = 0;
+    this._simTime = 0;
+  }
+  /* 连接入房（PairingHost.onOpen 挂钩）：默认观战，等待 claim_seat；
+   * 访客连接上限 = P2 席 1 条 + 观战 ≤8，超出拒码（ROOM_FULL） */
+  addChannel(ch) {
+    if (this.channels.length >= NET.SPECTATOR_MAX + 1) {
+      ch.sendCtrl({ t: 'error', code: NET.ERR.ROOM_FULL, msg: 'spectator cap' });
+      ch.close();
+      return false;
+    }
+    ch.seat = null;
+    this.channels.push(ch);
+    ch.onCtrl((f) => this._onCtrl(ch, f));
+    ch.onClose(() => this._onClose(ch));
+    ch.onSnap((f) => { if (ch.seat === 'P2' && f.t === 'input' && this.p2Input) this.p2Input.feed(f); });
+    this._broadcastState();
+  }
+  _onCtrl(ch, f) {
+    switch (f.t) {
+      case 'claim_seat': {
+        if (f.seat !== 'P1' && f.seat !== 'P2') { ch.sendCtrl({ t: 'error', code: 'SEAT_INVALID' }); return; }
+        if (f.seat === 'P1') { ch.sendCtrl({ t: 'error', code: NET.ERR.SEAT_TAKEN, msg: 'P1 由房主持有' }); return; }
+        if (this.seats.P2 && this.seats.P2 !== ch) { ch.sendCtrl({ t: 'error', code: NET.ERR.SEAT_TAKEN }); return; }
+        this.seats.P2 = ch; ch.seat = 'P2';
+        this.p2Input = new NetInputSource();       // 远程席 = NetInputSource（人类/AI 同包）
+        ch.sendCtrl({ t: 'seat_ok', seat: 'P2' });
+        this._broadcastState();
+        break;
+      }
+      case 'release_seat': {
+        if (ch.seat === 'P2') { this.seats.P2 = null; ch.seat = null; this.p2Input = null; this._broadcastState(); }
+        break;
+      }
+      case 'start': {
+        if (this.phase === 'WAITING' || this.phase === 'ENDED') this.beginCountdown();
+        break;
+      }
+      case 'leave': ch.close(); break;
+      default: break;
+    }
+  }
+  _onClose(ch) {
+    const i = this.channels.indexOf(ch);
+    if (i < 0) return;                   // 幂等：snap/ctrl 双 DC close 各触发一次，只处理首回
+    this.channels.splice(i, 1);
+    if (ch.seat === 'P2') {
+      ch.seat = null; this.seats.P2 = null;
+      /* PLAYING 中断线：座位 30s AI 托管（p2Input 换内置 AI），超时不变回收（P2 唯一） */
+      if (this.phase === 'PLAYING' && this.match && !this.match.ended) {
+        this.p2Input = new AIInput(createBuiltinAI(), 'P2');
+        this._takeoverUntil = (this._simTime || 0) + NET.AI_TAKEOVER;
+      } else this.p2Input = null;
+    }
+    this._broadcastState();
+  }
+  /* 房主开新局：COUNTDOWN 3s → demo Match（HeadlessMatch = v3.0 无头化成果复用） */
+  beginCountdown() {
+    this.phase = 'COUNTDOWN';
+    this._countdown = NET.COUNTDOWN;
+    this._broadcastState();
+  }
+  /* COUNTDOWN 到点自动开局（P2 缺席时内置 AI 托管兜底，等价断线语义） */
+  startMatch() {
+    if (this.phase === 'PLAYING') return;
+    this._matchSeq = (this._matchSeq || 0) + 1;
+    this.match = new Match(
+      { input: this.p1Input, fx: this.fx, audio: this.audio },
+      {
+        mode: 'demo',
+        p1Input: this.p1Input,
+        p2Input: this.p2Input || new AIInput(createBuiltinAI(), 'P2'),
+        timeLimit: 300,
+        onEnd: (seat) => this._onMatchEnd(seat),
+      });
+    this.phase = 'PLAYING';
+    this._simTime = 0;
+    this._broadcastState();
+  }
+  _onMatchEnd(seat) {
+    if (seat === 'P1') this.p1Wins++;
+    else if (seat === 'P2') this.p2Wins++;
+    const done = this.p1Wins >= 2 || this.p2Wins >= 2;
+    this.phase = done ? 'ENDED' : 'WAITING';
+    const frame = { t: 'match_end', result: seat, p1Wins: this.p1Wins, p2Wins: this.p2Wins };
+    this._broadcastCtrl(frame);
+    this.match = null;
+  }
+  /* 固定步驱动（App 主循环接入；dt = CONFIG.STEP） */
+  update(dt) {
+    if (this.phase === 'COUNTDOWN') {
+      this._countdown -= dt;
+      if (this._countdown <= 1e-9) this.startMatch();   // 浮点余数容差（±1 帧先例内）
+    } else if (this.phase === 'PLAYING' && this.match && !this.match.ended) {
+      this._simTime += dt;
+      this.match.update(dt);
+      this._broadcastSnapshot();
+    }
+  }
+  _broadcastSnapshot() {
+    const m = this.match;
+    if (!m) return;
+    const frame = {
+      t: 'snapshot', tick: m.tick,
+      p1: this._entSnap(m.player), p2: this._entSnap(m.p2),
+      events: (m.fx.lastEmitted || []).filter((e) => e.type !== 'guard_halo'),   // halo 附着型由访客按 phase 复现
+    };
+    for (const ch of this.channels) if (ch.open) ch.sendSnap(frame);
+  }
+  _entSnap(ent) {
+    if (!ent || !ent.combat) return { x: 0, y: 0, phase: 'DEAD', hp: 0, guard: 0 };
+    return { x: ent.x, y: ent.y, phase: ent.combat.phase, hp: ent.combat.hp,
+             guard: ent.combat.phase === 'GUARD' ? ent.combat.t : 0, facing: ent.facing };
+  }
+  _broadcastState() {
+    this._broadcastCtrl({ t: 'room_state',
+      seats: { P1: 'host', P2: this.seats.P2 ? 'remote' : null },
+      spectators: this.channels.filter((c) => !c.seat).length, phase: this.phase });
+  }
+  _broadcastCtrl(frame) {
+    for (const ch of this.channels) if (ch.open) ch.sendCtrl(frame);
+  }
+}
+
+/* ---------- GuestClient：访客端（收快照渲染 + 发 input + AI 席本地跑） ---------- */
+class GuestClient {
+  constructor(fx) {
+    this.fx = fx || new FXSystem();
+    this.chan = null;
+    this.state = { p1: null, p2: null };   // 最新快照（一期直渲最新帧，插值后续可选）
+    this.phase = 'WAITING';
+    this.p1Wins = 0; this.p2Wins = 0;
+    this.mySeat = null;
+    this._seq = 0;
+    this._ai = null;                        // AI 席：本地 think（ai-interface.md v3.1 §2）
+    this._inputMove = { x: 0, y: 0 }; this._inputClick = false; this._inputGuard = false;
+  }
+  attach(chan) {
+    this.chan = chan;
+    chan.onSnap((f) => {
+      if (f.t === 'snapshot') {
+        this.state = { p1: f.p1, p2: f.p2, tick: f.tick };
+        for (const ev of f.events || []) this.fx.queue.push(ev);
+        this.fx.flush(); this.fx.update(CONFIG.STEP);
+      }
+    });
+    chan.onCtrl((f) => {
+      if (f.t === 'room_state') this.phase = f.phase;
+      if (f.t === 'match_end') { this.p1Wins = f.p1Wins; this.p2Wins = f.p2Wins; if (this.onMatchEnd) this.onMatchEnd(f); }
+      if (f.t === 'seat_ok') {
+        this.mySeat = f.seat;
+        if (this._seatWaiter && this._seatWaiter.seat === f.seat) {
+          this._seatWaiter.resolve(); this._seatWaiter = null;
+        }
+      }
+      if (f.t === 'error') {
+        if (this._seatWaiter) { const w = this._seatWaiter; this._seatWaiter = null; w.reject(errCode(f.code || 'SEAT_ERROR', f.msg || '')); }
+        if (this.onError) this.onError(f);
+      }
+    });
+    chan.onClose(() => {
+      if (this._seatWaiter) { const w = this._seatWaiter; this._seatWaiter = null; w.reject(errCode(NET.ERR.PEER_LOST, 'channel closed')); }
+      if (this.onLost) this.onLost();
+    });
+  }
+  /* OrbAI.claimSeat('p1'|'p2')：Promise 语义；被占 → reject SEAT_TAKEN（不自动抢占） */
+  claimSeat(seat) {
+    if (!this.chan || !this.chan.open) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not connected'));
+    return new Promise((resolve, reject) => {
+      this._seatWaiter = { seat: seat.toUpperCase(), resolve, reject };
+      this.chan.sendCtrl({ t: 'claim_seat', seat: seat.toUpperCase() });
+    });
+  }
+  releaseSeat() {
+    if (!this.chan || !this.chan.open) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not connected'));
+    this.chan.sendCtrl({ t: 'release_seat' });
+    this.mySeat = null;
+    return Promise.resolve();
+  }
+  /* AI 席（访客端本地 think）：impl = createBuiltinAI() / compileAICode 产物 */
+  attachAI(impl) {
+    this._ai = new AIInput(impl, this.mySeat === 'P2' ? 'P2' : 'P1');
+  }
+  /* 人类输入采样（GuestScreen 每帧调）：本地 Input → 缓存 → sendInput */
+  sampleInput(input) {
+    this._inputMove = input.getMoveAxis();
+    this._inputClick = input.consumeClick(0);
+    this._inputGuard = input.guardHeld();
+  }
+  sendInput() {
+    if (!this.chan || !this.chan.open) return;
+    let move = this._inputMove, click0 = this._inputClick, guardHeld = this._inputGuard;
+    if (this._ai) {                        // AI 席：本地快照 think → 同包上行
+      this._ai._dec = { move: { x: 0, y: 0 }, click0: false, guardHeld: false };
+      const snap = this._guestSnapshotView();
+      try {
+        const d = this._ai.impl.think(snap);
+        this._ai._dec = { move: d && d.move ? { x: d.move.x || 0, y: d.move.y || 0 } : { x: 0, y: 0 },
+                          click0: !!(d && d.click0), guardHeld: !!(d && d.guardHeld) };
+      } catch (err) { console.warn('[OrbAI] guest think 异常：', err); }
+      move = this._ai._dec.move; click0 = this._ai._dec.click0; guardHeld = this._ai._dec.guardHeld;
+    }
+    this.chan.sendSnap({ t: 'input', seq: this._seq++,
+                         move, click0: !!click0, guardHeld: !!guardHeld });
+  }
+  /* 访客侧 think 快照：与 Match.snapshotView 同构（AI 无感差异） */
+  _guestSnapshotView() {
+    const me = this.mySeat === 'P2' ? this.state.p2 : this.state.p1;
+    const op = this.mySeat === 'P2' ? this.state.p1 : this.state.p2;
+    const norm = (e) => e ? { x: e.x, y: e.y, phase: e.phase, hp: e.hp, guardCd: 0,
+                              chargeDir: { x: Math.cos(e.facing || 0), y: Math.sin(e.facing || 0) } }
+                         : { x: 0, y: 0, phase: 'IDLE', hp: 3, guardCd: 0, chargeDir: { x: 1, y: 0 } };
+    return { tick: this.state.tick || 0, self: norm(me), opp: norm(op),
+             arena: { W: CONFIG.VIEW.W, H: CONFIG.VIEW.H, BALL_R: CONFIG.BALL.R,
+                      HIT_R: CONFIG.CHARGE.HIT_R, HIT_OFFSET: CONFIG.CHARGE.HIT_OFFSET,
+                      CHARGE_DISTANCE: CONFIG.CHARGE.DASH_SPEED * CONFIG.CHARGE.ACTIVE / 1000 } };
+  }
+  /* 快照渲染（访客屏）：两球 + 特效 + 血条（复用 drawBall 语义的轻量版） */
+  render(ctx) {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+    this.fx.render(ctx);
+    for (const [ent, color] of [[this.state.p1, CONFIG.COLOR.PLAYER], [this.state.p2, CONFIG.COLOR.GHOST]]) {
+      if (!ent || ent.phase === 'DEAD') continue;
+      ctx.save();
+      ctx.shadowColor = color; ctx.shadowBlur = 18;
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(ent.x, ent.y, CONFIG.BALL.R, 0, Math.PI * 2); ctx.fill();
+      if (ent.phase === 'GUARD') {         // guard_halo 附着型：按 phase 复现（events 中已剔除）
+        ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5;
+        ctx.beginPath(); ctx.arc(ent.x, ent.y, 20, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+    ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('P1 ' + this.p1Wins + ' : ' + this.p2Wins + ' P2', CONFIG.VIEW.W / 2, 40);
+  }
+}
+
+/* ============================================================
  * §11 Screens —— 屏幕栈 + DOM overlay（ADR-005）
  * ============================================================ */
 class Screen {
@@ -1960,17 +2506,165 @@ class MenuScreen extends Screen {
   onEsc() { return true; }              // 主菜单 ESC 不动作
 }
 
-/* ---------- v3.0 联机屏（本期仅骨架：连接按钮置灰 + 「配对联机开发中」；
- * LAN/WebRTC 实体等 E-41 架构补丁到达后另行派发） ---------- */
-class OnlineScreen extends Screen {
+/* ---------- v3.1 PAIR 屏（配对联机唯一新 DOM 屏；PairingHost/PairingGuest 的 UI 外壳） ---------- */
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    return true;
+  }
+  try {                                    // file:// 降级：execCommand（单文件双击即玩保底）
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    return true;
+  } catch (e) { return false; }
+}
+
+class PairScreen extends Screen {
   get ambient() { return true; }
-  enter() { this.app.showScreen('scr-online'); }
-  exit() { this.app.hideScreen('scr-online'); }
-  onOlAction(act) {
-    if (act === 'back') { this.app.stack.replace(new MenuScreen(this.app)); return; }
-    this.app.toast('配对联机开发中（E-41 架构补丁后上线）', 4000);
+  constructor(app, mode) { super(app); this.mode = mode; this._lastInvite = null; this._lastCode = null; }
+  enter() {
+    const app = this.app;
+    app.showScreen('scr-pair');
+    app._el('pair-choose').style.display = this.mode === 'choose' ? '' : 'none';
+    app._el('pair-host').style.display = this.mode === 'host' ? '' : 'none';
+    app._el('pair-guest').style.display = this.mode === 'guest' ? '' : 'none';
+    this._status(this.mode === 'host' ? '你是房主（权威端）'
+               : this.mode === 'guest' ? '加入房间' : '创建或加入房间');
+  }
+  exit() { this.app.hideScreen('scr-pair'); }
+  _el(id) { return this.app._el(id); }
+  _status(text, isErr) {
+    const el = this._el('pair-status');
+    el.textContent = text;
+    el.style.color = isErr ? '#ff6b6b' : '#d9a441';
+  }
+  /* —— 房主：生成邀请码 —— */
+  async genInvite() {
+    const app = this.app;
+    this._status('生成中…（等待 ICE 收集）');
+    try {
+      if (!app.pairingHost) app.pairingHost = new PairingHost();
+      app.pairingHost.onOpen = (ch) => {
+        app.hostRoom.addChannel(ch);
+        this._refreshPeers();
+        this._status('已连接', false);
+      };
+      const invite = await app.pairingHost.createInvite();
+      this._lastInvite = invite; this._lastCode = invite.code;
+      const box = this._el('pair-code');
+      box.textContent = invite.code;
+      box.style.display = 'block';
+      this._el('pair-copy').style.display = '';
+      this._status('邀请码已生成——发给对方，然后粘贴其应答码');
+    } catch (err) {
+      this._status('生成失败：' + (err.code || err.message) + '（请在同一局域网内使用）', true);
+      throw err;                            // OrbAI.createRoom 语义：错误上抛
+    }
+  }
+  /* —— 房主：确认应答码 —— */
+  async confirmAnswer(codeIn) {
+    if (!this._lastInvite) { this._status('请先生成邀请码', true); return; }
+    try {
+      await this.app.pairingHost.acceptAnswer(this._lastInvite.id, codeIn);
+      this._status('应答码已确认，等待连接建立…');
+    } catch (err) {
+      this._status('应答码无效：' + (err.code || err.message), true);
+      throw err;
+    }
+  }
+  /* —— 访客：凭邀请码加入 —— */
+  async joinWith(codeIn) {
+    const app = this.app;
+    this._status('生成应答码…');
+    try {
+      if (!app.pairingGuest) app.pairingGuest = new PairingGuest();
+      if (!app.guestClient) app.guestClient = new GuestClient(app.fx);
+      const r = await app.pairingGuest.join(codeIn);
+      const out = this._el('pair-answer-out');
+      out.textContent = r.answerCode;
+      out.style.display = 'block';
+      this._el('pair-answer-copy').style.display = '';
+      this._el('pair-wait').style.display = '';
+      this._el('pair-claim-p2').style.display = '';
+      this._status('把应答码回传给房主，等待确认…');
+      r.chanPromise.then((ch) => {
+        app.guestClient.attach(ch);
+        this._el('pair-wait').textContent = '已连接！可占座 P2 或观战';
+        this._status('已连接', false);
+      }).catch((err) => {
+        this._status('连接失败：' + (err.code || err.message) + '——请在同一局域网内使用', true);
+      });
+      return r;
+    } catch (err) {
+      this._status('邀请码无效：' + (err.code || err.message), true);
+      throw err;
+    }
+  }
+  _refreshPeers() {
+    const room = this.app.hostRoom;
+    const n = room ? room.channels.length : 0;
+    const p2 = room && room.seats.P2 ? '已入座' : '空位';
+    this._el('pair-peers').textContent = '连接数：' + n + ' · P2 席位：' + p2 + ' · 观战上限 ' + NET.SPECTATOR_MAX;
   }
   onEsc() { this.app.stack.replace(new MenuScreen(this.app)); return true; }
+}
+
+/* ---------- v3.1 联机对局屏（host：驱动权威 HostRoom / guest：采样+发 input+快照渲染） ---------- */
+class NetGameScreen extends Screen {
+  constructor(app, mode) { super(app); this.mode = mode; this.confirming = false; }
+  enter() {
+    if ('ontouchstart' in window) this.app.setTouchUI(true);
+    if (this.mode === 'host') this.app.hostRoom.p1Input = this.app.input;   // 房主 P1 = 本地 human（AI 可经 OrbAI 注入替换）
+  }
+  exit() { this.app.setTouchUI(false); }
+  update(dt) {
+    if (this.confirming || this.app.portrait) return;
+    if (this.mode === 'host') {
+      this.app.hostRoom.update(dt);
+    } else {
+      const c = this.app.guestClient;
+      if (c && c.chan) { c.sampleInput(this.app.input); c.sendInput(); }
+    }
+  }
+  renderGame(ctx) {
+    if (this.mode === 'host') {
+      const room = this.app.hostRoom;
+      if (room.phase === 'PLAYING' && room.match) { room.match.render(ctx); return; }
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+      ctx.fillStyle = '#fff'; ctx.font = '40px sans-serif'; ctx.textAlign = 'center';
+      if (room.phase === 'COUNTDOWN') {
+        ctx.fillText(Math.ceil(room._countdown), CONFIG.VIEW.W / 2, 340);
+      } else if (room.phase === 'ENDED' || room.p1Wins + room.p2Wins > 0) {
+        ctx.fillText('P1 ' + room.p1Wins + ' : ' + room.p2Wins + ' P2（三局两胜）', CONFIG.VIEW.W / 2, 330);
+        ctx.font = '20px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)';
+        ctx.fillText('返回配对屏可重开', CONFIG.VIEW.W / 2, 380);
+      } else {
+        ctx.fillText('等待开始…', CONFIG.VIEW.W / 2, 340);
+      }
+    } else {
+      const c = this.app.guestClient;
+      if (c) c.render(ctx);
+      else {
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.VIEW.W, CONFIG.VIEW.H);
+        ctx.fillStyle = '#fff'; ctx.font = '30px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('未连接', CONFIG.VIEW.W / 2, 340);
+      }
+    }
+  }
+  onEsc() {                            // 联机放弃：leave 帧（对应 DC close），重走配对
+    this.confirming = true;
+    this.app.showConfirm('退出联机对局？（断线需重新配对）', () => {
+      if (this.mode === 'guest' && this.app.guestClient && this.app.guestClient.chan) {
+        this.app.guestClient.chan.sendCtrl({ t: 'leave' });
+        this.app.guestClient.chan.close();
+      }
+      this.app.stack.replace(new MenuScreen(this.app));
+    }, () => { this.confirming = false; });
+    return true;
+  }
 }
 
 /* ---------- 对局屏（持 Match + HUD + ESC 放弃确认） ---------- */
@@ -2172,6 +2866,9 @@ class App {
     this.fx = new FXSystem();
     this.audio = new AudioBus();
     this.store = new LocalGhostStore();      // v3.0：本地池（联机 PVP 直连对局，无幽灵池）
+    /* v3.1 联机：权威房主房间 / 配对器 / 访客端（PairScreen 与 OrbAI 共用） */
+    this.hostRoom = new HostRoom(this.fx, this.audio);
+    this.pairingHost = null; this.pairingGuest = null; this.guestClient = null;
     this.stack = new ScreenStack(this);
     this.confirmOpen = false;
     this.portrait = false;                   // v3.0 手机竖屏态（遮罩 + 对局暂停）
@@ -2327,8 +3024,8 @@ class App {
       case 'solo':
         this.stack.replace(new GameScreen(this, { mode: 'solo' }));
         break;
-      case 'online':                     // v3.0：联机骨架屏（配对联机开发中，E-41 后接入实体）
-        this.stack.replace(new OnlineScreen(this));
+      case 'online':                     // v3.1：配对联机（PAIR 屏：创建/加入）
+        this.stack.replace(new PairScreen(this, 'choose'));
         break;
       case 'self': {
         if (this.store.list('self').length === 0) {
@@ -2401,13 +3098,45 @@ if (typeof document !== 'undefined') {
     const mi = e.target.closest('.mi');
     if (mi && !mi.classList.contains('dis')) app.onMenuAction(mi.dataset.act);
   });
-  // v3.0 联机屏：创建/加入置灰仍可点 → 开发中提示；返回 → 菜单
-  document.getElementById('scr-online').addEventListener('click', (e) => {
-    const mi = e.target.closest('.mi');
-    if (!mi) return;
+  // v3.1 PAIR 屏：配对联机全流程按钮（host 生成/复制/确认/开始；guest 加入/复制/占座）
+  const pairEl = (id) => document.getElementById(id);
+  const pairGo = (fn) => Promise.resolve().then(fn).catch(() => {});   // 错误已由屏内 status 呈现
+  pairEl('pair-as-host').addEventListener('click', () => app.stack.replace(new PairScreen(app, 'host')));
+  pairEl('pair-as-guest').addEventListener('click', () => app.stack.replace(new PairScreen(app, 'guest')));
+  pairEl('pair-gen').addEventListener('click', () => {
     const s = app.stack.current;
-    if (s && s.onOlAction) s.onOlAction(mi.dataset.ol);
+    if (s instanceof PairScreen) pairGo(() => s.genInvite());
   });
+  pairEl('pair-copy').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s instanceof PairScreen && s._lastCode && copyText(s._lastCode)) app.toast('邀请码已复制');
+  });
+  pairEl('pair-confirm').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s instanceof PairScreen) pairGo(() => s.confirmAnswer(pairEl('pair-answer-in').value.trim()));
+  });
+  pairEl('pair-start').addEventListener('click', () => {
+    app.hostRoom.beginCountdown();
+    app.stack.replace(new NetGameScreen(app, 'host'));
+  });
+  pairEl('pair-join').addEventListener('click', () => {
+    const s = app.stack.current;
+    if (s instanceof PairScreen) pairGo(() => s.joinWith(pairEl('pair-offer-in').value.trim()));
+  });
+  pairEl('pair-answer-copy').addEventListener('click', () => {
+    const s = app.stack.current;
+    const t = pairEl('pair-answer-out').textContent;
+    if (s instanceof PairScreen && t && copyText(t)) app.toast('应答码已复制');
+  });
+  pairEl('pair-claim-p2').addEventListener('click', () => {
+    const c = app.guestClient;
+    if (!c) return;
+    c.claimSeat('P2').then(() => {
+      app.toast('已占座 P2');
+      pairEl('pair-claim-p2').style.display = 'none';
+    }).catch((err) => app.toast(err.code === 'SEAT_TAKEN' ? 'P2 已被占用' : '占座失败：' + err.code));
+  });
+  pairEl('pair-back').addEventListener('click', () => app.stack.replace(new MenuScreen(app)));
   document.getElementById('confirm-yes').addEventListener('click', () => app.hideConfirm(true));
   document.getElementById('confirm-no').addEventListener('click', () => app.hideConfirm(false));
   // v2.1 开机屏：任意位置点击一次 → MENU（音频 lazy init 同帧生效，控制 #7）
@@ -2446,6 +3175,48 @@ if (typeof document !== 'undefined') {
       this._cbs.delete(matchId);
       if (cb) cb(info);
     },
+
+    /* ---------- v3.1 配对与占座 API（ai-interface.md v3.1；Promise 语义） ---------- */
+    /* 房主端：进 PAIR 屏并生成首张邀请码 → {roomCode}（UI 已同步展示+复制） */
+    createRoom() {
+      return new Promise((resolve, reject) => {
+        app.stack.replace(new PairScreen(app, 'host'));
+        const s = app.stack.current;
+        pairGo(() => s.genInvite()).then(() => {
+          if (s._lastCode) resolve({ roomCode: s._lastCode });
+          else reject(errCode(NET.ERR.PEER_LOST, 'invite generation failed'));
+        }).catch(reject);
+      });
+    },
+    /* 加入端：凭邀请码生成应答码 → {answerCode}（回传房主即完成信令） */
+    joinRoom(roomCode) {
+      return new Promise((resolve, reject) => {
+        app.stack.replace(new PairScreen(app, 'guest'));
+        const s = app.stack.current;
+        pairGo(() => s.joinWith(roomCode)).then((r) => resolve({ answerCode: r.answerCode })).catch(reject);
+      });
+    },
+    /* 房主端：粘贴加入方的应答码 → 配对完成（resolve 于连接建立） */
+    confirmAnswer(answerCode) {
+      return new Promise((resolve, reject) => {
+        const s = app.stack.current;
+        if (!(s instanceof PairScreen) || s.mode !== 'host') { reject(errCode(NET.ERR.PEER_LOST, 'not hosting')); return; }
+        pairGo(() => s.confirmAnswer(answerCode)).then(() => {
+          /* 等待该张 invite 的 chanPromise（NetChannel 建立） */
+          if (s._lastInvite) s._lastInvite.chanPromise.then(() => resolve()).catch(reject);
+          else reject(errCode(NET.ERR.PEER_LOST, 'no pending invite'));
+        }).catch(reject);
+      });
+    },
+    /* 访客端占座：'p1'|'p2'；被占 reject SEAT_TAKEN；断线 reject PEER_LOST */
+    claimSeat(seat) {
+      if (!app.guestClient) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not a guest'));
+      return app.guestClient.claimSeat(seat);
+    },
+    releaseSeat() {
+      if (!app.guestClient) return Promise.reject(errCode(NET.ERR.PEER_LOST, 'not a guest'));
+      return app.guestClient.releaseSeat();
+    },
   };
 
   app.start();
@@ -2459,7 +3230,11 @@ if (typeof document !== 'undefined') {
                              seedOnLevelWin,
                              /* v3.0：OrbAI 管道（纯控制台 API）+ 触屏纯逻辑（selftest T14/T16） */
                              AIInput, createBuiltinAI, compileAICode, deepFreeze,
-                             VirtualJoystick, TouchButton, TouchSource };
+                             VirtualJoystick, TouchButton, TouchSource,
+                             /* v3.1：WebRTC 配对码联机（selftest T18/T19/T20） */
+                             NET, b64urlEncode, b64urlDecode, packSDP, unpackSDP, buildSDP,
+                             errCode, whenDcOpen, NetChannel, PairingHost, PairingGuest,
+                             NetInputSource, HostRoom, GuestClient };
 }
 
 })();
